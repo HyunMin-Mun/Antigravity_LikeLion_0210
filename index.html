@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hello & Counter</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=Outfit:wght@400;700&display=swap" rel="stylesheet">
+    <meta name="description" content="A simple and beautiful visitor counter application.">
+</head>
+<body>
+    <div class="background-blobs">
+        <div class="blob blob-1"></div>
+        <div class="blob blob-2"></div>
+        <div class="blob blob-3"></div>
+    </div>
+    
+    <main class="container">
+        <div class="glass-card">
+            <h1 id="main-title">Hello!</h1>
+            <p class="subtitle">Welcome to our amazing page</p>
+            
+            <div class="counter-display">
+                <span class="counter-label">Visitor Count</span>
+                <span id="visitor-count" class="count-value">0</span>
+            </div>
+            
+            <button id="increment-btn" class="primary-button">
+                Visit Now
+                <span class="button-glow"></span>
+            </button>
+        </div>
+    </main>
+
+    <script src="script.js"></script>
+</body>
+</html>
