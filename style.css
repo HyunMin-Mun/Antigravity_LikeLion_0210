@@ -1,12 +1,12 @@
 :root {
-    --primary: #10b981;
-    --primary-hover: #059669;
-    --bg-gradient: linear-gradient(135deg, #064e3b 0%, #022c22 100%);
+    --primary: #6366f1;
+    --primary-hover: #4f46e5;
+    --bg-gradient: linear-gradient(135deg, #1e1b4b 0%, #0f172a 100%);
     --card-bg: rgba(255, 255, 255, 0.03);
-    --card-border: rgba(255, 255, 255, 0.08);
-    --text-main: #f0fdf4;
-    --text-muted: #a7f3d0;
-    --accent: #34d399;
+    --card-border: rgba(255, 255, 255, 0.1);
+    --text-main: #f8fafc;
+    --text-muted: #94a3b8;
+    --accent: #818cf8;
 }
 
 * {
@@ -47,7 +47,7 @@ body {
 .blob-1 {
     width: 400px;
     height: 400px;
-    background: #059669;
+    background: #4f46e5;
     top: -100px;
     left: -100px;
 }
@@ -55,7 +55,7 @@ body {
 .blob-2 {
     width: 300px;
     height: 300px;
-    background: #0d9488;
+    background: #7c3aed;
     bottom: -50px;
     right: -50px;
     animation-delay: -5s;
@@ -64,7 +64,7 @@ body {
 .blob-3 {
     width: 250px;
     height: 250px;
-    background: #14b8a6;
+    background: #2563eb;
     top: 40%;
     left: 60%;
     animation-delay: -10s;
@@ -115,7 +115,7 @@ h1 {
     font-size: 3.5rem;
     font-weight: 800;
     margin-bottom: 0.5rem;
-    background: linear-gradient(to right, #fff, #a7f3d0);
+    background: linear-gradient(to right, #fff, #c7d2fe);
     -webkit-background-clip: text;
     background-clip: text;
     -webkit-text-fill-color: transparent;
@@ -168,7 +168,7 @@ h1 {
 .primary-button:hover {
     background: var(--primary-hover);
     transform: translateY(-2px);
-    box-shadow: 0 10px 20px -5px rgba(16, 185, 129, 0.4);
+    box-shadow: 0 10px 20px -5px rgba(99, 102, 241, 0.4);
 }
 
 .primary-button:active {
