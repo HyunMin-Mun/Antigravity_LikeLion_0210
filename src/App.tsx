@@ -1,0 +1,959 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import {
+  Layout,
+  CheckSquare,
+  Inbox,
+  BarChart2,
+  Plus,
+  MessageSquare,
+  ChevronRight,
+  Search,
+  Filter,
+  Clock,
+  X,
+  Zap,
+  TrendingUp,
+  List,
+  LogOut,
+  ChevronDown,
+  Calendar,
+  MoreVertical,
+  AlertCircle
+} from 'lucide-react';
+
+// --- Constants & Types ---
+const ROLES = { MEMBER: 'member', MANAGER: 'manager' } as const;
+const STATUS = { TODO: '준비', IN_PROGRESS: '진행', DONE: '완료' } as const;
+const APPROVAL = { NONE: 'none', PENDING: 'pending', APPROVED: 'approved', REJECTED: 'rejected' } as const;
+const TYPES = ['기획', '개발', '디자인', '운영', '회의', '리서치', '문서'] as const;
+const LEVELS = { LOW: 'low', MED: 'med', HIGH: 'high' } as const;
+const API_KEY = ""; // Gemini API Key
+
+type Role = typeof ROLES[keyof typeof ROLES];
+type Status = typeof STATUS[keyof typeof STATUS];
+type ApprovalStatus = typeof APPROVAL[keyof typeof APPROVAL];
+type Level = typeof LEVELS[keyof typeof LEVELS];
+type WorkType = typeof TYPES[number];
+
+interface User {
+  id: string;
+  name: string;
+  email: string;
+  role: Role;
+  today_status: string;
+  password?: string;
+}
+
+interface WorkItem {
+  id: string;
+  project_name: string;
+  title: string;
+  description: string;
+  type: WorkType;
+  assignees: string[];
+  requester: string;
+  start_date: string;
+  due_date: string;
+  status: Status;
+  impact: Level;
+  urgency: Level;
+  priority_score: number;
+  approval_status: ApprovalStatus;
+  updated_at: string;
+  last_update_note: string;
+}
+
+interface Proposal {
+  id: string;
+  suggestion_text: string;
+  explanation: string;
+  created_at: string;
+  created_by: string;
+  approval_status: ApprovalStatus;
+}
+
+interface Weights {
+  impact: number;
+  urgency: number;
+  deadline: number;
+}
+
+// --- Initial Mock Data ---
+const INITIAL_USERS: User[] = [
+  { id: 'u1', name: '김철수', email: 'chul@example.com', role: 'manager', today_status: '근무', password: '123' },
+  { id: 'u2', name: '이영희', email: 'young@example.com', role: 'member', today_status: '재택', password: '123' },
+  { id: 'u3', name: '박지민', email: 'jimin@example.com', role: 'member', today_status: '회의', password: '123' },
+  { id: 'u4', name: '최동현', email: 'dong@example.com', role: 'member', today_status: '외근', password: '123' },
+  { id: 'u5', name: '정하나', email: 'hana@example.com', role: 'member', today_status: '근무', password: '123' },
+  { id: 'u6', name: '한소리', email: 'sori@example.com', role: 'member', today_status: '휴가', password: '123' },
+];
+
+const generateWorkItems = (): WorkItem[] => {
+  const projects = ['NextGen AI Platform', 'Global UX Renewal', 'Internal ERP System'];
+  return Array.from({ length: 20 }, (_, i): WorkItem => ({
+    id: `w${i + 1}`,
+    project_name: projects[i % 3],
+    title: `TASK #${i + 1}: ${['UI 개발', 'API 설계', '데이터 분석', 'QA 테스트', '문서화'][i % 5]}`,
+    description: `이 업무는 ${projects[i % 3]} 프로젝트의 핵심 이정표를 달성하기 위한 중요한 태스크입니다. 상세 구현 및 협업이 필요합니다.`,
+    assignees: [INITIAL_USERS[(i % 5) + 1].id],
+    requester: INITIAL_USERS[0].id,
+    start_date: new Date().toISOString().split('T')[0],
+    due_date: new Date(Date.now() + (i * 86400000)).toISOString().split('T')[0],
+    status: i % 3 === 0 ? STATUS.DONE : (i % 2 === 0 ? STATUS.IN_PROGRESS : STATUS.TODO),
+    updated_at: new Date().toISOString(),
+    last_update_note: i % 4 === 0 ? "마일스톤 1단계 완료" : "진행 상황 체크 중",
+    type: TYPES[i % TYPES.length],
+    impact: i % 3 === 0 ? LEVELS.HIGH : (i % 2 === 0 ? LEVELS.MED : LEVELS.LOW),
+    urgency: i % 4 === 0 ? LEVELS.HIGH : (i % 2 === 0 ? LEVELS.MED : LEVELS.LOW),
+    priority_score: 0,
+    approval_status: i % 7 === 0 ? APPROVAL.PENDING : APPROVAL.NONE,
+  }));
+};
+
+// --- Utils ---
+const getPriorityScore = (impact: Level, urgency: Level, dueDate: string, weights: Weights = { impact: 3, urgency: 2, deadline: 5 }): number => {
+  const levelMap = { low: 1, med: 2, high: 3 };
+  const iScore = levelMap[impact] || 1;
+  const uScore = levelMap[urgency] || 1;
+  const now = new Date();
+  const due = new Date(dueDate);
+  const diffDays = Math.max(1, Math.ceil((due.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)));
+  const dScore = Math.max(1, 10 / diffDays);
+  return (iScore * weights.impact) + (uScore * weights.urgency) + (dScore * weights.deadline);
+};
+
+const formatDate = (dateStr: string): string => {
+  if (!dateStr) return '-';
+  const d = new Date(dateStr);
+  return d.toLocaleDateString('ko-KR', { month: 'short', day: 'numeric' });
+};
+
+// --- Components ---
+interface ButtonProps {
+  children: React.ReactNode;
+  onClick?: (e: React.MouseEvent<HTMLButtonElement>) => void;
+  variant?: 'primary' | 'secondary' | 'danger' | 'ghost' | 'outline' | 'indigo';
+  className?: string;
+  disabled?: boolean;
+  type?: 'button' | 'submit' | 'reset';
+}
+
+const Button: React.FC<ButtonProps> = ({ children, onClick, variant = 'primary', className = '', disabled = false, type = 'button' }) => {
+  const variants = {
+    primary: "bg-indigo-600 text-white hover:bg-indigo-700 shadow-lg shadow-indigo-100",
+    secondary: "bg-gray-100 text-gray-700 hover:bg-gray-200",
+    danger: "bg-red-50 text-red-600 hover:bg-red-100",
+    ghost: "bg-transparent text-gray-500 hover:bg-gray-50",
+    outline: "border border-gray-200 text-gray-600 hover:bg-gray-50",
+    indigo: "bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-100"
+  };
+  return (
+    <button type={type} onClick={onClick} disabled={disabled} className={`px-4 py-2 rounded-xl font-bold transition-all flex items-center justify-center gap-2 disabled:opacity-50 ${variants[variant]} ${className}`}>
+      {children}
+    </button>
+  );
+};
+
+interface BadgeProps {
+  children: React.ReactNode;
+  color?: 'gray' | 'indigo' | 'green' | 'red' | 'yellow' | 'purple';
+}
+
+const Badge: React.FC<BadgeProps> = ({ children, color = 'gray' }) => {
+  const colors = {
+    gray: "bg-gray-100 text-gray-600",
+    indigo: "bg-indigo-100 text-indigo-700",
+    green: "bg-green-100 text-green-700 border border-green-200",
+    red: "bg-red-100 text-red-700",
+    yellow: "bg-yellow-100 text-yellow-700",
+    purple: "bg-purple-100 text-purple-700"
+  };
+  return <span className={`px-3 py-1.5 rounded-lg text-xs font-black uppercase tracking-wider ${colors[color]}`}>{children}</span>;
+};
+
+// --- Main App Component ---
+export default function App() {
+  const [users, setUsers] = useState<User[]>(INITIAL_USERS);
+  const [workItems, setWorkItems] = useState<WorkItem[]>([]);
+  const [proposals, setProposals] = useState<Proposal[]>([]);
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+
+  const [view, setView] = useState<string>('login');
+  const [boardViewMode, setBoardViewMode] = useState<'kanban' | 'list'>('kanban');
+  const [selectedWorkId, setSelectedWorkId] = useState<string | null>(null);
+  const [isChatOpen, setIsChatOpen] = useState<boolean>(false);
+  const [managerWeights, setManagerWeights] = useState<Weights>({ impact: 3, urgency: 2, deadline: 5 });
+
+  // 데이터 초기화
+  useEffect(() => {
+    const initialItems: WorkItem[] = generateWorkItems().map(item => ({
+      ...item,
+      priority_score: getPriorityScore(item.impact, item.urgency, item.due_date, managerWeights)
+    }));
+    setWorkItems(initialItems);
+
+    setProposals([
+      { id: 'p1', suggestion_text: '인력 재배치 제안', explanation: 'AI 프로젝트 마감이 임박하여 디자인 인력을 기획 지원으로 이동할 것을 제안합니다.', created_at: new Date().toISOString(), created_by: 'u1', approval_status: 'pending' },
+      { id: 'p2', suggestion_text: '회의 통합 제안', explanation: '중복되는 운영 회의를 주 1회로 통합하여 개발 시간을 확보하세요.', created_at: new Date().toISOString(), created_by: 'u1', approval_status: 'pending' }
+    ]);
+  }, []);
+
+  // 가중치 변경 시 우선순위 점수 동기화
+  useEffect(() => {
+    setWorkItems(prev => prev.map(item => ({
+      ...item,
+      priority_score: getPriorityScore(item.impact, item.urgency, item.due_date, managerWeights)
+    })));
+  }, [managerWeights]);
+
+  // --- 핸들러 ---
+  const handleSignup = (name: string, email: string, password?: string, role: Role = 'member') => {
+    const newUser: User = { id: `u${Date.now()}`, name, email, password, role, today_status: '근무' };
+    setUsers([...users, newUser]);
+    setCurrentUser(newUser);
+    setView(role === ROLES.MANAGER ? 'board' : 'my');
+  };
+  const handleLogin = (email: string, password?: string) => {
+    const user = users.find(u => u.email === email && (!password || u.password === password));
+    if (user) {
+      setCurrentUser(user);
+      setView(user.role === ROLES.MANAGER ? 'board' : 'my');
+    } else {
+      alert("이메일 또는 비밀번호가 잘못되었습니다.");
+    }
+  };
+
+  const handleLogout = () => {
+    setCurrentUser(null);
+    setView('login');
+  };
+
+  const updateWorkItem = (id: string, data: Partial<WorkItem>) => {
+    setWorkItems(prev => prev.map(item => item.id === id ? { ...item, ...data, updated_at: new Date().toISOString() } : item));
+  };
+
+  const addWorkItem = (data: Partial<WorkItem>) => {
+    const newItem: WorkItem = {
+      id: `w${Date.now()}`,
+      project_name: data.project_name || 'Unassigned',
+      title: data.title || 'Untitled Task',
+      description: data.description || '',
+      type: data.type || '개발',
+      assignees: data.assignees || [currentUser?.id || ''],
+      requester: currentUser?.id || '',
+      start_date: new Date().toISOString().split('T')[0],
+      due_date: data.due_date || new Date().toISOString().split('T')[0],
+      status: data.status || STATUS.TODO,
+      impact: data.impact || LEVELS.MED,
+      urgency: data.urgency || LEVELS.MED,
+      priority_score: getPriorityScore(data.impact || LEVELS.MED, data.urgency || LEVELS.MED, data.due_date || new Date().toISOString().split('T')[0], managerWeights),
+      approval_status: APPROVAL.NONE,
+      updated_at: new Date().toISOString(),
+      last_update_note: '태스크 생성됨'
+    };
+    setWorkItems([newItem, ...workItems]);
+  };
+
+  // --- UI Components ---
+
+  const AuthView = () => {
+    const [isSignup, setIsSignup] = useState(false);
+    const [name, setName] = useState('');
+    const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
+    const [role, setRole] = useState<Role>('member');
+
+    return (
+      <div className="min-h-screen bg-white flex items-center justify-center p-6">
+        <div className="w-full max-w-md space-y-8">
+          <div className="text-center space-y-4">
+            <div className="inline-block bg-indigo-600 p-4 rounded-3xl shadow-2xl shadow-indigo-200 mb-4 transition-transform hover:scale-110">
+              <CheckSquare className="text-white w-12 h-12" />
+            </div>
+            <h1 className="text-5xl font-black text-gray-900 tracking-tight">WorkFlow</h1>
+            <p className="text-gray-400 font-bold uppercase tracking-[0.3em] text-[10px]">전략적 가시성 플랫폼</p>
+          </div>
+
+          <div className="bg-gray-50 p-10 rounded-[3rem] border border-gray-100 shadow-sm transition-all hover:shadow-xl">
+            <form className="space-y-6" onSubmit={(e) => {
+              e.preventDefault();
+              if (isSignup) handleSignup(name, email, password, role);
+              else handleLogin(email, password);
+            }}>
+              <div className="space-y-4">
+                {isSignup && (
+                  <>
+                    <input required placeholder="이름" className="w-full px-6 py-5 bg-white border border-gray-100 rounded-2xl focus:ring-2 focus:ring-indigo-500 font-bold outline-none shadow-sm transition-all"
+                      value={name} onChange={e => setName(e.target.value)} />
+                    <div className="flex gap-3">
+                      <button type="button" onClick={() => setRole('member')} className={`flex-1 py-3 rounded-xl font-black text-xs uppercase tracking-widest transition-all ${role === 'member' ? 'bg-indigo-600 text-white shadow-lg' : 'bg-white text-gray-400 border border-gray-100'}`}>일반 멤버</button>
+                      <button type="button" onClick={() => setRole('manager')} className={`flex-1 py-3 rounded-xl font-black text-xs uppercase tracking-widest transition-all ${role === 'manager' ? 'bg-indigo-600 text-white shadow-lg' : 'bg-white text-gray-400 border border-gray-100'}`}>관리자</button>
+                    </div>
+                  </>
+                )}
+                <input required type="email" placeholder="이메일" className="w-full px-6 py-5 bg-white border border-gray-100 rounded-2xl focus:ring-2 focus:ring-indigo-500 font-bold outline-none shadow-sm transition-all"
+                  value={email} onChange={e => setEmail(e.target.value)} />
+                <input required type="password" placeholder="비밀번호" className="w-full px-6 py-5 bg-white border border-gray-100 rounded-2xl focus:ring-2 focus:ring-indigo-500 font-bold outline-none shadow-sm transition-all"
+                  value={password} onChange={e => setPassword(e.target.value)} />
+              </div>
+              <Button type="submit" className="w-full py-5 rounded-2xl text-xl shadow-indigo-100">{isSignup ? '계정 생성하기' : '로그인'}</Button>
+            </form>
+
+            <div className="mt-8 text-center">
+              <button onClick={() => setIsSignup(!isSignup)} className="text-indigo-600 font-black text-sm hover:underline">
+                {isSignup ? '이미 계정이 있나요? 로그인' : '처음이신가요? 회원가입'}
+              </button>
+            </div>
+
+            <div className="mt-10 pt-8 border-t border-gray-200">
+              <p className="text-[10px] text-gray-400 mb-4 font-black uppercase tracking-widest text-center">데모 계정 빠른 접속</p>
+              <div className="flex gap-3 justify-center">
+                <button onClick={() => handleLogin('young@example.com', '123')} className="px-4 py-2 bg-white border border-gray-100 rounded-xl text-xs font-black text-indigo-600 hover:bg-indigo-50 transition-all uppercase tracking-tighter shadow-sm">멤버 모드</button>
+                <button onClick={() => handleLogin('chul@example.com', '123')} className="px-4 py-2 bg-white border border-gray-100 rounded-xl text-xs font-black text-indigo-600 hover:bg-indigo-50 transition-all uppercase tracking-tighter shadow-sm">매니저 모드</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const Sidebar = () => (
+    <aside className="w-80 bg-white border-r border-gray-50 h-screen flex flex-col sticky top-0 overflow-hidden">
+      <div className="p-10 flex items-center gap-4">
+        <div className="bg-indigo-600 p-2.5 rounded-2xl shadow-xl shadow-indigo-100">
+          <CheckSquare className="text-white w-6 h-6" />
+        </div>
+        <span className="text-3xl font-black tracking-tighter text-gray-900 group cursor-default">WorkFlow</span>
+      </div>
+      <nav className="flex-1 px-6 space-y-3 mt-4">
+        <SidebarItem icon={<BarChart2 size={22} />} label="내 대시보드" active={view === 'my'} onClick={() => setView('my')} />
+        <SidebarItem icon={<Layout size={22} />} label="팀 업무 보드" active={view === 'board'} onClick={() => setView('board')} />
+        <SidebarItem icon={<TrendingUp size={22} />} label="전략 우선순위 엔진" active={view === 'priority'} onClick={() => setView('priority')} />
+        {currentUser?.role === ROLES.MANAGER && (
+          <SidebarItem icon={<Inbox size={22} />} label="승인 인박스" active={view === 'inbox'} onClick={() => setView('inbox')} count={proposals.filter(p => p.approval_status === 'pending').length} />
+        )}
+      </nav>
+
+      <div className="p-8 pb-12 mt-auto">
+        <div className="bg-gray-50 p-6 rounded-[2.5rem] border border-gray-100 relative group transition-all hover:bg-white hover:shadow-2xl">
+          <div className="flex items-center gap-4">
+            <div className="w-14 h-14 rounded-2xl bg-indigo-600 text-white flex items-center justify-center font-black text-2xl shadow-xl shadow-indigo-100 group-hover:scale-110 transition-transform">
+              {currentUser?.name?.charAt(0)}
+            </div>
+            <div className="flex-1 overflow-hidden">
+              <p className="text-base font-black text-gray-900 truncate tracking-tight">{currentUser?.name}</p>
+              <p className="text-[10px] text-gray-400 font-extrabold uppercase tracking-[0.2em]">{currentUser?.role}</p>
+            </div>
+            <button onClick={handleLogout} className="text-gray-300 hover:text-red-500 transition-colors p-3 hover:bg-white rounded-xl shadow-sm"><LogOut size={20} /></button>
+          </div>
+        </div>
+      </div>
+    </aside>
+  );
+
+  const SidebarItem = ({ icon, label, active, onClick, count }: { icon: React.ReactNode, label: string, active: boolean, onClick: () => void, count?: number }) => (
+    <button onClick={onClick} className={`w-full flex items-center gap-5 px-5 py-4 rounded-2xl text-[15px] font-bold transition-all relative group ${active ? 'bg-indigo-600 text-white shadow-2xl shadow-indigo-100 translate-x-1' : 'text-gray-400 hover:bg-indigo-50 hover:text-indigo-600'}`}>
+      {icon}
+      <span className="flex-1 text-left tracking-tight">{label}</span>
+      {count !== undefined && count > 0 && <span className={`px-2.5 py-1 rounded-full text-[10px] font-black ${active ? 'bg-white text-indigo-600' : 'bg-red-500 text-white animate-pulse shadow-lg shadow-red-200'}`}>{count}</span>}
+    </button>
+  );
+
+  const Header = ({ title }: { title: string }) => (
+    <header className="h-24 bg-white/90 backdrop-blur-xl flex items-center justify-between px-12 sticky top-0 z-20 border-b border-gray-50 shadow-sm">
+      <div>
+        <h1 className="text-3xl font-black text-gray-900 tracking-tighter uppercase">{title}</h1>
+        <p className="text-xs font-bold text-gray-300 tracking-[0.1em] mt-1">실시간 협업 데이터</p>
+      </div>
+      <div className="flex items-center gap-8">
+        <div className="relative group">
+          <Search className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-300 group-focus-within:text-indigo-500 transition-colors" size={20} />
+          <input className="pl-14 pr-8 py-3.5 bg-gray-50 border-transparent border focus:border-indigo-100 rounded-full text-sm font-bold w-80 focus:ring-4 focus:ring-indigo-500/5 shadow-inner transition-all outline-none uppercase tracking-tighter" placeholder="업무, 팀원 검색..." />
+        </div>
+        <div className="flex items-center gap-4">
+          <Button onClick={() => setSelectedWorkId('new')} variant="indigo" className="px-6 py-3.5 rounded-full text-xs font-black uppercase tracking-widest">
+            <Plus size={18} /> 업무 추가
+          </Button>
+          <Button onClick={() => setIsChatOpen(true)} className="px-6 py-3.5 rounded-full text-xs font-black uppercase tracking-widest">
+            <Zap size={16} /> 전략 분석
+          </Button>
+        </div>
+      </div>
+    </header>
+  );
+
+  const BoardPage = () => {
+    const [filters, setFilters] = useState({ project: '전체', member: '전체', status: '전체' });
+
+    const filteredItems = useMemo(() => {
+      return workItems.filter(item => (
+        (filters.project === '전체' || item.project_name === filters.project) &&
+        (filters.member === '전체' || item.assignees.includes(filters.member)) &&
+        (filters.status === '전체' || item.status === filters.status)
+      ));
+    }, [workItems, filters]);
+
+    const columns = [STATUS.TODO, STATUS.IN_PROGRESS, STATUS.DONE];
+
+    return (
+      <div className="p-12 space-y-10 flex flex-col h-full bg-gray-50/30 overflow-hidden">
+        <div className="flex items-center justify-between bg-white p-6 rounded-[2.5rem] shadow-sm border border-gray-50">
+          <div className="flex items-center gap-10">
+            <div className="flex items-center gap-4">
+              <div className="bg-indigo-50 p-2.5 rounded-xl text-indigo-600 shadow-sm"><Filter size={20} /></div>
+              <h3 className="text-base font-black text-gray-900 tracking-tight uppercase">지능형 필터</h3>
+            </div>
+            <div className="flex gap-4">
+              <FilterSelect label="프로젝트 클러스터" value={filters.project} onChange={(v: string) => setFilters({ ...filters, project: v })} options={['전체', ...new Set(workItems.map(w => w.project_name))]} />
+              <FilterSelect label="담당자" value={filters.member} onChange={(v: string) => setFilters({ ...filters, member: v })} options={['전체', ...users.map(u => ({ label: u.name, value: u.id }))]} />
+            </div>
+          </div>
+          <div className="flex bg-gray-50 p-1.5 rounded-2xl border border-gray-100 shadow-inner">
+            <button onClick={() => setBoardViewMode('kanban')} className={`flex items-center gap-2 px-6 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${boardViewMode === 'kanban' ? 'bg-white text-indigo-600 shadow-md ring-1 ring-gray-100' : 'text-gray-400 hover:text-gray-600'}`}>
+              <Layout size={16} /> 칸반 보드
+            </button>
+            <button onClick={() => setBoardViewMode('list')} className={`flex items-center gap-2 px-6 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${boardViewMode === 'list' ? 'bg-white text-indigo-600 shadow-md ring-1 ring-gray-100' : 'text-gray-400 hover:text-gray-600'}`}>
+              <List size={16} /> 리스트 뷰
+            </button>
+          </div>
+        </div>
+
+        {boardViewMode === 'kanban' ? (
+          <div className="flex-1 flex gap-10 overflow-x-auto no-scrollbar pb-10">
+            {columns.map(col => (
+              <div key={col} className="w-[420px] flex flex-col gap-6 flex-shrink-0">
+                <div className="flex items-center justify-between px-6 bg-white/50 py-3 rounded-2xl border border-white/80">
+                  <h3 className="text-xl font-black text-gray-900 tracking-tight flex items-center gap-3">
+                    {col}
+                    <span className="text-xs font-black bg-indigo-600 text-white px-3 py-1.5 rounded-full shadow-lg shadow-indigo-100">
+                      {filteredItems.filter(i => i.status === col).length}
+                    </span>
+                  </h3>
+                  <MoreVertical size={20} className="text-gray-300 hover:text-gray-600 cursor-pointer" />
+                </div>
+                <div className="flex-1 bg-white/30 rounded-[3rem] p-6 space-y-6 overflow-y-auto no-scrollbar border border-white/50 backdrop-blur-sm shadow-inner transition-all hover:bg-white/40">
+                  {filteredItems.filter(i => i.status === col).map(item => (
+                    <WorkCard key={item.id} item={item} onClick={() => setSelectedWorkId(item.id)} users={users} />
+                  ))}
+                  <button onClick={() => setSelectedWorkId('new')} className="w-full py-6 border-2 border-dashed border-gray-200 rounded-[2rem] text-gray-300 hover:text-indigo-600 hover:border-indigo-300 hover:bg-indigo-50/30 transition-all flex items-center justify-center gap-3 font-black text-sm uppercase tracking-widest group">
+                    <Plus size={24} className="group-hover:rotate-90 transition-transform" /> 업무 추가
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="flex-1 bg-white rounded-[3rem] border border-gray-100 shadow-xl shadow-gray-100/50 overflow-hidden flex flex-col">
+            <div className="overflow-y-auto flex-1 no-scrollbar">
+              <table className="w-full text-left">
+                <thead className="sticky top-0 bg-white/90 backdrop-blur-xl z-10 border-b border-gray-100">
+                  <tr className="text-[11px] text-gray-400 font-black uppercase tracking-[0.2em]">
+                    <th className="px-12 py-8">업무명 & 프로젝트 컨테이너</th>
+                    <th className="px-8 py-8">유형</th>
+                    <th className="px-8 py-8">담당 멤버</th>
+                    <th className="px-8 py-8 text-center">상태</th>
+                    <th className="px-8 py-8 text-center">전략 점수</th>
+                    <th className="px-12 py-8 text-right">마감일</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {filteredItems.map(item => (
+                    <tr key={item.id} className="hover:bg-indigo-50 group transition-all cursor-pointer" onClick={() => setSelectedWorkId(item.id)}>
+                      <td className="px-12 py-8">
+                        <p className="text-[10px] text-indigo-500 font-black uppercase tracking-widest mb-1.5">{item.project_name}</p>
+                        <p className="text-lg font-black text-gray-900 group-hover:text-indigo-600 transition-colors uppercase tracking-tight">{item.title}</p>
+                      </td>
+                      <td className="px-8 py-8"><Badge color="purple">{item.type}</Badge></td>
+                      <td className="px-8 py-8">
+                        <div className="flex items-center gap-3">
+                          <div className="flex -space-x-2">
+                            {item.assignees.map(aid => (
+                              <div key={aid} className="w-9 h-9 rounded-xl bg-indigo-600 border-2 border-white flex items-center justify-center text-[11px] font-black text-white shadow-md transition-transform hover:scale-110" title={users.find(u => u.id === aid)?.name}>
+                                {users.find(u => u.id === aid)?.name.charAt(0)}
+                              </div>
+                            ))}
+                          </div>
+                          {item.assignees.length > 0 && (
+                            <span className="text-xs font-black text-gray-500 uppercase tracking-tighter">
+                              {item.assignees.length === 1
+                                ? users.find(u => u.id === item.assignees[0])?.name
+                                : `${users.find(u => u.id === item.assignees[0])?.name} 외 ${item.assignees.length - 1}명`}
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-8 py-8 text-center"><Badge color={item.status === STATUS.DONE ? 'green' : (item.status === STATUS.IN_PROGRESS ? 'indigo' : 'gray')}>{item.status}</Badge></td>
+                      <td className="px-8 py-8 text-center font-black text-xl text-gray-900 tabular-nums tracking-tighter">{Math.round(item.priority_score)}</td>
+                      <td className="px-12 py-8 text-right text-sm font-black text-gray-400 uppercase tracking-widest">{formatDate(item.due_date)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {filteredItems.length === 0 && (
+                <div className="py-40 text-center font-black text-gray-300 uppercase tracking-[0.3em] flex flex-col items-center gap-6">
+                  <Inbox size={60} className="text-gray-100" />
+                  No data found in this visibility cluster
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const FilterSelect = ({ label, value, onChange, options }: any) => (
+    <div className="flex flex-col gap-2 min-w-[160px]">
+      <label className="text-[10px] font-black text-gray-300 uppercase tracking-widest ml-1">{label}</label>
+      <div className="relative group">
+        <select value={value} onChange={e => onChange(e.target.value)} className="w-full bg-gray-50 border-none appearance-none rounded-2xl px-5 py-3 text-xs font-black text-gray-900 focus:ring-4 focus:ring-indigo-500/10 outline-none shadow-inner cursor-pointer pr-10">
+          {options.map((opt: any) => {
+            const val = typeof opt === 'string' ? opt : opt.value;
+            const lbl = typeof opt === 'string' ? opt : opt.label;
+            return <option key={val} value={val}>{lbl}</option>;
+          })}
+        </select>
+        <ChevronDown size={14} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none group-hover:text-indigo-600 transition-colors" />
+      </div>
+    </div>
+  );
+
+  const WorkCard = ({ item, onClick, users }: any) => (
+    <div className="bg-white p-10 rounded-[2.5rem] shadow-[0_8px_30px_rgb(0,0,0,0.04)] hover:shadow-2xl hover:shadow-indigo-100/50 hover:-translate-y-3 transition-all cursor-pointer border border-gray-50/50 hover:border-indigo-100 group relative" onClick={onClick}>
+      <div className="flex justify-between items-start mb-6">
+        <Badge color={item.impact === 'high' ? 'red' : (item.impact === 'med' ? 'indigo' : 'gray')}>{item.type}</Badge>
+        <div className="flex items-center gap-3">
+          {item.approval_status === 'pending' && <div className="w-3 h-3 bg-yellow-400 rounded-full animate-ping shadow-[0_0_12px_rgba(250,204,21,0.5)]" />}
+          <span className="text-xl font-black text-gray-900 tabular-nums tracking-tighter">{Math.round(item.priority_score)}</span>
+        </div>
+      </div>
+      <h4 className="text-xl font-black text-gray-900 mb-4 leading-tight group-hover:text-indigo-600 transition-colors tracking-tight uppercase">{item.title}</h4>
+      <p className="text-base text-gray-400 font-bold line-clamp-2 mb-10 leading-relaxed uppercase tracking-tight">{item.description}</p>
+
+      <div className="flex items-center justify-between pt-8 border-t border-gray-100">
+        <div className="flex items-center gap-3">
+          <div className="flex -space-x-4">
+            {item.assignees.map((aid: string) => {
+              const u = users.find((u: any) => u.id === aid);
+              return (
+                <div key={aid} className="w-12 h-12 rounded-2xl bg-indigo-600 border-4 border-white flex items-center justify-center text-sm font-black text-white shadow-xl shadow-indigo-100 transition-transform hover:scale-125 hover:z-10 group/avatar">
+                  {u?.name?.charAt(0)}
+                  <div className="absolute -top-10 left-1/2 -translate-x-1/2 bg-gray-900 text-white text-[10px] px-3 py-1 rounded-lg opacity-0 group-hover/avatar:opacity-100 transition-opacity whitespace-nowrap z-20 pointer-events-none uppercase font-black tracking-widest">{u?.name}</div>
+                </div>
+              );
+            })}
+          </div>
+          {item.assignees.length > 0 && (
+            <span className="text-[11px] font-black text-gray-500 uppercase tracking-tighter">
+              {item.assignees.length === 1
+                ? users.find(u => u.id === item.assignees[0])?.name
+                : `${users.find(u => u.id === item.assignees[0])?.name}+`}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-3 bg-gray-50 px-4 py-2.5 rounded-full border border-gray-100 shadow-inner group-hover:bg-white transition-colors">
+          <Calendar size={16} className="text-indigo-600" />
+          <span className="text-xs font-black text-gray-500 uppercase tracking-widest">{formatDate(item.due_date)}</span>
+        </div>
+      </div>
+    </div>
+  );
+
+  const MyPage = () => {
+    const myTasks = useMemo(() =>
+      workItems.filter(item => item.assignees?.includes(currentUser?.id || ''))
+        .sort((a, b) => new Date(a.due_date).getTime() - new Date(b.due_date).getTime())
+      , [workItems, currentUser]);
+
+    return (
+      <div className="p-12 space-y-12 animate-in fade-in duration-1000">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-10">
+          <StatCard title="배정된 업무" value={myTasks.length} icon={<CheckSquare className="text-white" />} color="bg-indigo-600" />
+          <StatCard title="진행 중인 업무" value={myTasks.filter(t => t.status !== STATUS.DONE).length} icon={<Clock className="text-white" />} color="bg-yellow-500" />
+          <StatCard title="고영향도 업무" value={myTasks.filter(t => t.impact === 'high').length} icon={<TrendingUp className="text-white" />} color="bg-red-500" />
+        </div>
+
+        <section className="bg-white rounded-[4rem] shadow-2xl shadow-gray-200/50 border border-gray-100 overflow-hidden transition-all hover:border-indigo-100">
+          <div className="p-12 border-b border-gray-100 flex items-center justify-between bg-white">
+            <div>
+              <h2 className="text-3xl font-black text-gray-900 tracking-tighter uppercase">집중 업무 큐</h2>
+              <p className="text-xs font-bold text-gray-300 tracking-[0.2em] mt-2 italic uppercase">마감일 임박 순으로 정렬됨</p>
+            </div>
+            <Button variant="outline" onClick={() => setView('board')} className="px-8 py-4 rounded-full text-xs font-black uppercase tracking-widest hover:bg-indigo-600 hover:text-white border-2">전체 팀 보드 보기 <ChevronRight size={18} /></Button>
+          </div>
+          <table className="w-full text-left">
+            <thead>
+              <tr className="bg-gray-50/50 text-[11px] text-gray-400 font-black uppercase tracking-[0.2em]">
+                <th className="px-12 py-8">업무 정보</th>
+                <th className="px-8 py-8 text-center">진행 상태</th>
+                <th className="px-8 py-8 text-center">마감 기한</th>
+                <th className="px-12 py-8">최신 전략적 업데이트</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-50">
+              {myTasks.length === 0 ? (
+                <tr><td colSpan={4} className="px-10 py-32 text-center text-gray-300 font-black uppercase tracking-[0.3em]">배정된 업무가 없습니다.</td></tr>
+              ) : myTasks.map(task => (
+                <tr key={task.id} className="hover:bg-indigo-50/30 cursor-pointer group transition-all" onClick={() => setSelectedWorkId(task.id)}>
+                  <td className="px-12 py-10">
+                    <p className="text-[10px] text-indigo-500 font-black uppercase mb-1.5 tracking-[0.15em]">{task.project_name}</p>
+                    <p className="text-xl font-black text-gray-900 group-hover:text-indigo-600 transition-colors uppercase tracking-tight">{task.title}</p>
+                  </td>
+                  <td className="px-8 py-10 text-center">
+                    <Badge color={task.status === STATUS.DONE ? 'green' : (task.status === STATUS.IN_PROGRESS ? 'indigo' : 'gray')}>{task.status}</Badge>
+                  </td>
+                  <td className="px-8 py-10 text-center">
+                    <span className="text-sm text-gray-600 font-black uppercase tracking-widest">{formatDate(task.due_date)}</span>
+                  </td>
+                  <td className="px-12 py-10">
+                    <div className="flex items-center gap-3 bg-white p-4 rounded-2xl border border-gray-100 group-hover:border-indigo-100 transition-all shadow-sm">
+                      <AlertCircle size={16} className="text-indigo-400" />
+                      <p className="text-sm text-gray-500 font-bold italic line-clamp-1">"{task.last_update_note}"</p>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      </div>
+    );
+  };
+
+  const StatCard = ({ title, value, icon, color }: any) => (
+    <div className="bg-white p-10 rounded-[3rem] shadow-xl shadow-gray-100 border border-gray-100 relative overflow-hidden group hover:-translate-y-2 transition-all hover:shadow-2xl">
+      <div className="flex items-center justify-between mb-6 relative z-10">
+        <h3 className="font-black text-gray-300 text-[11px] uppercase tracking-[0.2em]">{title}</h3>
+        <div className={`p-4 rounded-2xl ${color} shadow-lg group-hover:scale-110 transition-transform`}>{icon}</div>
+      </div>
+      <div className="text-6xl font-black text-gray-900 tracking-tighter tabular-nums relative z-10">{value}</div>
+      <div className="absolute top-0 right-0 w-32 h-32 bg-gray-50 rounded-full blur-3xl -mr-16 -mt-16 group-hover:bg-indigo-50 transition-colors" />
+    </div>
+  );
+
+  const WorkDetailModal = ({ id, onClose }: { id: string, onClose: () => void }) => {
+    const isNew = id === 'new';
+    const item: Partial<WorkItem> = workItems.find(w => w.id === id) || {
+      title: '',
+      description: '',
+      project_name: '',
+      status: STATUS.TODO,
+      assignees: [currentUser?.id || ''],
+      type: '개발',
+      impact: LEVELS.MED,
+      urgency: LEVELS.MED,
+      due_date: new Date(Date.now() + 604800000).toISOString().split('T')[0],
+      last_update_note: ''
+    };
+    const [form, setForm] = useState<Partial<WorkItem>>(item);
+
+    return (
+      <div className="fixed inset-0 bg-gray-900/60 backdrop-blur-2xl flex items-center justify-center z-50 p-8 animate-in fade-in duration-300">
+        <div className="bg-white rounded-[4rem] w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col shadow-2xl transition-all scale-in-95 animate-in">
+          <div className="px-14 py-10 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
+            <div>
+              <h2 className="text-4xl font-black text-gray-900 tracking-tighter uppercase">{isNew ? '새 업무 생성' : '업무 전략 상세'}</h2>
+              <p className="text-xs font-bold text-gray-400 tracking-widest mt-2 uppercase">핵심 논리적 작업 정의</p>
+            </div>
+            <button onClick={onClose} className="p-4 hover:bg-white rounded-2xl transition-all text-gray-300 hover:text-red-500 border border-transparent hover:border-gray-200 shadow-sm"><X size={28} /></button>
+          </div>
+          <form className="flex-1 overflow-y-auto p-14 space-y-12 no-scrollbar" onSubmit={(e) => {
+            e.preventDefault();
+            if (isNew) addWorkItem(form);
+            else updateWorkItem(id, form);
+            onClose();
+          }}>
+            <div className="grid grid-cols-2 gap-12">
+              <div className="col-span-2 space-y-4">
+                <label className="text-xs font-black text-gray-300 uppercase tracking-[0.3em] block ml-1">업무 제목</label>
+                <input required className="w-full px-8 py-6 bg-gray-50 border-transparent border focus:border-indigo-100 rounded-[2rem] focus:ring-4 focus:ring-indigo-500/5 font-black text-2xl outline-none shadow-inner transition-all uppercase placeholder:text-gray-200"
+                  value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} placeholder="업무 식별자를 입력하세요..." />
+              </div>
+              <div className="space-y-4">
+                <label className="text-xs font-black text-gray-300 uppercase tracking-[0.3em] block ml-1">프로젝트 클러스터</label>
+                <input required className="w-full px-8 py-5 bg-gray-50 border-transparent border focus:border-indigo-100 rounded-2xl focus:ring-4 focus:ring-indigo-500/5 font-bold outline-none shadow-inner transition-all uppercase"
+                  value={form.project_name} onChange={e => setForm({ ...form, project_name: e.target.value })} placeholder="프로젝트 이름..." />
+              </div>
+              <div className="space-y-4">
+                <label className="text-xs font-black text-gray-300 uppercase tracking-[0.3em] block ml-1">작업 유형</label>
+                <div className="relative group">
+                  <select className="w-full px-8 py-5 bg-gray-50 border-transparent border focus:border-indigo-100 rounded-2xl focus:ring-4 focus:ring-indigo-500/5 font-bold outline-none shadow-inner appearance-none uppercase transition-all"
+                    value={form.type} onChange={e => setForm({ ...form, type: e.target.value as WorkType })}>
+                    {TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                  <ChevronDown className="absolute right-6 top-1/2 -translate-y-1/2 text-gray-300 pointer-events-none group-hover:text-indigo-600 transition-all" size={20} />
+                </div>
+              </div>
+              <div className="col-span-2 space-y-4 bg-gray-50/50 p-10 rounded-[3rem] border border-gray-100">
+                <label className="text-xs font-black text-gray-300 uppercase tracking-[0.3em] block ml-1 mb-2">담당 멤버 (멀티 선택 가능)</label>
+                <div className="flex flex-wrap gap-4">
+                  {users.map(u => {
+                    const isSelected = form.assignees?.includes(u.id);
+                    return (
+                      <button
+                        key={u.id}
+                        type="button"
+                        onClick={() => {
+                          const currentAssignees = form.assignees || [];
+                          const nextAssignees = isSelected
+                            ? currentAssignees.filter(sid => sid !== u.id)
+                            : [...currentAssignees, u.id];
+                          setForm({ ...form, assignees: nextAssignees });
+                        }}
+                        className={`flex items-center gap-3 px-6 py-3.5 rounded-2xl text-xs font-black transition-all border-2 ${isSelected
+                          ? 'bg-indigo-600 border-indigo-600 text-white shadow-xl shadow-indigo-100 -translate-y-1'
+                          : 'bg-white border-gray-100 text-gray-400 hover:border-indigo-200 hover:text-indigo-600'}`}
+                      >
+                        <div className={`w-6 h-6 rounded-lg flex items-center justify-center text-[10px] ${isSelected ? 'bg-white text-indigo-600' : 'bg-gray-100 text-gray-400'}`}>
+                          {u.name.charAt(0)}
+                        </div>
+                        {u.name}
+                        {u.id === currentUser?.id && <span className={`ml-1 text-[8px] px-1.5 py-0.5 rounded ${isSelected ? 'bg-indigo-500 text-white' : 'bg-gray-200 text-gray-400'}`}>나</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="col-span-2 space-y-4">
+                <label className="text-xs font-black text-gray-300 uppercase tracking-[0.3em] block ml-1">전략적 설명</label>
+                <textarea className="w-full px-8 py-6 bg-gray-50 border-transparent border focus:border-indigo-100 rounded-[2rem] focus:ring-4 focus:ring-indigo-500/5 font-bold text-gray-600 outline-none shadow-inner transition-all min-h-[160px] leading-relaxed uppercase tracking-tight"
+                  value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} placeholder="핵심 근거 및 목표를 기술하세요..." />
+              </div>
+              <div className="grid grid-cols-2 gap-8 col-span-2 bg-indigo-50/30 p-10 rounded-[3rem] border border-indigo-100 shadow-inner">
+                <div className="space-y-4">
+                  <label className="text-xs font-black text-indigo-400 uppercase tracking-[0.3em] block ml-1">시간 범위 (마감일)</label>
+                  <input type="date" className="w-full px-8 py-5 bg-white border border-indigo-100 rounded-2xl focus:ring-4 focus:ring-indigo-500/10 font-black outline-none shadow-sm transition-all"
+                    value={form.due_date} onChange={e => setForm({ ...form, due_date: e.target.value })} />
+                </div>
+                <div className="space-y-4">
+                  <label className="text-xs font-black text-indigo-400 uppercase tracking-[0.3em] block ml-1">워크플로우 상태</label>
+                  <select className="w-full px-8 py-5 bg-white border border-indigo-100 rounded-2xl focus:ring-4 focus:ring-indigo-500/10 font-black outline-none shadow-sm appearance-none transition-all"
+                    value={form.status} onChange={e => setForm({ ...form, status: e.target.value as Status })}>
+                    {Object.values(STATUS).map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </div>
+                <div className="space-y-4">
+                  <label className="text-xs font-black text-red-400 uppercase tracking-[0.3em] block ml-1">전략적 영향도</label>
+                  <select className="w-full px-8 py-5 bg-white border border-red-100 rounded-2xl focus:ring-4 focus:ring-red-500/10 font-black outline-none shadow-sm appearance-none transition-all uppercase"
+                    value={form.impact} onChange={e => setForm({ ...form, impact: e.target.value as Level })}>
+                    <option value="low">낮음</option>
+                    <option value="med">중간</option>
+                    <option value="high">높음</option>
+                  </select>
+                </div>
+                <div className="space-y-4">
+                  <label className="text-xs font-black text-yellow-500 uppercase tracking-[0.3em] block ml-1">긴급도 매트릭스</label>
+                  <select className="w-full px-8 py-5 bg-white border border-yellow-100 rounded-2xl focus:ring-4 focus:ring-yellow-500/10 font-black outline-none shadow-sm appearance-none transition-all uppercase"
+                    value={form.urgency} onChange={e => setForm({ ...form, urgency: e.target.value as Level })}>
+                    <option value="low">낮음</option>
+                    <option value="med">중간</option>
+                    <option value="high">높음</option>
+                  </select>
+                </div>
+              </div>
+              <div className="col-span-2 space-y-4">
+                <label className="text-xs font-black text-indigo-500 uppercase tracking-[0.3em] block ml-1 flex items-center gap-2">
+                  <MessageSquare size={16} /> 최신 전술 정보
+                </label>
+                <input className="w-full px-8 py-6 bg-white border border-indigo-100 rounded-2xl focus:ring-4 focus:ring-indigo-500/10 font-black outline-none shadow-xl shadow-indigo-100/20 italic"
+                  value={form.last_update_note} onChange={e => setForm({ ...form, last_update_note: e.target.value })} placeholder="현재 어느 단계에 있습니까?" />
+              </div>
+            </div>
+            <div className="flex justify-end gap-6 pt-10">
+              <Button variant="ghost" onClick={onClose} className="px-14 py-5 rounded-full text-lg uppercase font-black hover:bg-gray-50 border-2">거래 취소</Button>
+              <Button type="submit" className="px-20 py-5 rounded-full text-lg shadow-2xl shadow-indigo-100 font-black uppercase tracking-widest transition-transform hover:scale-105 active:scale-95">데이터 확정</Button>
+            </div>
+          </form>
+        </div>
+      </div>
+    );
+  };
+
+  const InboxPage = () => (
+    <div className="p-12 max-w-5xl mx-auto space-y-12 animate-in slide-in-from-top-10 duration-700 h-full overflow-y-auto no-scrollbar pb-32">
+      <div>
+        <h2 className="text-5xl font-black text-gray-900 tracking-tighter uppercase">승인 인박스</h2>
+        <p className="text-gray-400 font-black mt-3 uppercase tracking-[0.4em] text-xs">전략적 승인을 기다리는 항목</p>
+      </div>
+      <div className="space-y-10">
+        {proposals.filter(p => p.approval_status === 'pending').map(prop => (
+          <div key={prop.id} className="bg-white p-14 rounded-[4rem] border border-gray-100 shadow-2xl shadow-indigo-100/20 flex flex-col gap-10 group hover:border-indigo-200 transition-all hover:-translate-y-2">
+            <div className="flex items-start gap-10">
+              <div className="bg-indigo-600 p-8 rounded-[2.5rem] text-white shadow-2xl shadow-indigo-200 group-hover:rotate-6 group-hover:scale-110 transition-all">
+                <Zap size={48} />
+              </div>
+              <div className="flex-1 space-y-4">
+                <div className="flex items-center justify-between mb-4">
+                  <span className="text-xs font-black text-indigo-600 uppercase tracking-[0.3em] bg-indigo-50 px-4 py-2 rounded-full border border-indigo-100">AI 논리 시뮬레이션 분석</span>
+                  <span className="text-xs text-gray-300 font-black uppercase tracking-widest">{formatDate(prop.created_at)}</span>
+                </div>
+                <h4 className="font-black text-gray-900 text-3xl leading-tight uppercase tracking-tighter">{prop.suggestion_text}</h4>
+                <div className="bg-gray-50 p-10 rounded-[3rem] border border-gray-100 group-hover:bg-white transition-all shadow-inner group-hover:shadow-md">
+                  <p className="text-lg text-gray-500 leading-relaxed font-bold italic uppercase tracking-tight">"{prop.explanation}"</p>
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center justify-between pt-10 border-t border-gray-100">
+              <div className="flex gap-6">
+                <Button className="px-14 py-5 rounded-full font-black text-sm uppercase tracking-[0.2em] shadow-2xl shadow-indigo-100 hover:scale-105" onClick={() => setProposals(prev => prev.map(p => p.id === prop.id ? { ...p, approval_status: 'approved' } : p))}>승인</Button>
+                <Button variant="outline" className="px-14 py-5 rounded-full font-black text-sm uppercase tracking-[0.2em] hover:bg-red-50 hover:text-red-500 hover:border-red-200" onClick={() => setProposals(prev => prev.map(p => p.id === prop.id ? { ...p, approval_status: 'rejected' } : p))}>반려</Button>
+              </div>
+              <div className="text-right">
+                <p className="text-[10px] text-gray-300 font-black uppercase tracking-[0.2em] mb-2 tracking-widest">요청자</p>
+                <p className="text-lg font-black text-gray-800 uppercase tracking-tighter">{users.find(u => u.id === prop.created_by)?.name}</p>
+              </div>
+            </div>
+          </div>
+        ))}
+        {proposals.filter(p => p.approval_status === 'pending').length === 0 && (
+          <div className="py-40 text-center font-black text-gray-300 uppercase tracking-[0.5em] flex flex-col items-center gap-10">
+            <CheckSquare size={100} className="text-gray-50 animate-bounce" />
+            승인 대기 중인 항목이 없습니다.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  const PriorityPage = () => {
+    const sortedItems = useMemo(() =>
+      workItems.filter(i => i.status !== STATUS.DONE)
+        .sort((a, b) => b.priority_score - a.priority_score)
+      , [workItems]);
+
+    const projectGroups = useMemo(() => {
+      const groups: Record<string, WorkItem[]> = {};
+      sortedItems.forEach(item => {
+        if (!groups[item.project_name]) groups[item.project_name] = [];
+        groups[item.project_name].push(item);
+      });
+      return groups;
+    }, [sortedItems]);
+
+    return (
+      <div className="p-12 space-y-16 h-full overflow-y-auto no-scrollbar pb-40">
+        {/* AI Strategic Intelligence Feed */}
+        <div className="bg-white p-1 rounded-[4rem] shadow-2xl shadow-indigo-100 ring-1 ring-gray-100 overflow-hidden group">
+          <div className="bg-gradient-to-br from-indigo-600 via-indigo-700 to-indigo-900 p-16 rounded-[3.8rem] text-white relative overflow-hidden group">
+            <div className="absolute top-0 right-0 w-[600px] h-[600px] bg-white/10 rounded-full blur-[100px] -mr-40 -mt-40 animate-pulse" />
+            <div className="relative z-10 flex flex-col lg:flex-row gap-16 items-center">
+              <div className="flex-1 space-y-8">
+                <div className="flex items-center gap-6">
+                  <div className="bg-white/20 p-6 rounded-[2rem] backdrop-blur-3xl border border-white/20 shadow-2xl ring-1 ring-white/30 animate-float">
+                    <Zap size={48} className="text-white fill-white" />
+                  </div>
+                  <div>
+                    <h3 className="text-4xl font-black tracking-tighter uppercase mb-2">주간 전략 인텔리전스</h3>
+                    <div className="flex items-center gap-3">
+                      <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
+                      <p className="text-indigo-200 font-black uppercase tracking-[0.3em] text-xs">시스템 라이브 시뮬레이션 활성</p>
+                    </div>
+                  </div>
+                </div>
+                <div className="bg-white/10 p-10 rounded-[3rem] border border-white/10 backdrop-blur-md shadow-inner transition-all hover:bg-white/15">
+                  <p className="text-xl font-bold leading-relaxed italic opacity-95 uppercase tracking-tight">
+                    "분석 완료: {Object.keys(projectGroups).length}개의 프로젝트 클러스터 중 'NextGen AI' 프로젝트에 즉각적인 리소스 투입이 필요합니다.
+                    우선순위 인덱스가 현재 배포에서 4개의 크리티컬 실패 지점을 식별했습니다. 오늘 내로 인력 재배치를 권장합니다."
+                  </p>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-6 w-full lg:w-96">
+                <PriorityStat label="시스템 우선순위 인덱스" value="98.4" sub="크리티컬" color="text-red-400" />
+                <PriorityStat label="프로젝트 가속도" value="+22%" sub="상승 중" color="text-green-400" />
+                <PriorityStat label="활성 리스크 요인" value="L4" sub="주의" color="text-yellow-400" />
+                <PriorityStat label="팀 효율성" value="92%" sub="최적화됨" color="text-indigo-300" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="max-w-7xl mx-auto space-y-16">
+          <div className="text-center space-y-4">
+            <h2 className="text-6xl font-black text-gray-900 tracking-tighter uppercase">계산된 우선순위 매트릭스</h2>
+            <p className="text-gray-400 font-extrabold uppercase tracking-[0.5em] text-sm">수학적 가중치가 적용된 업무 파이프라인</p>
+          </div>
+
+          <div className="space-y-20">
+            {Object.entries(projectGroups).map(([project, items]) => (
+              <div key={project} className="space-y-10 group">
+                <div className="flex items-center gap-6 group">
+                  <div className="h-px flex-1 bg-gray-100 group-hover:bg-indigo-100 transition-colors" />
+                  <h3 className="text-3xl font-black text-gray-900 tracking-tighter uppercase px-12 py-5 bg-white rounded-full border border-gray-100 shadow-xl shadow-gray-100/50 group-hover:scale-105 transition-transform">
+                    {project} 클러스터
+                    <span className="ml-4 text-xs font-black text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-full italic">{items.length}개 업무</span>
+                  </h3>
+                  <div className="h-px flex-1 bg-gray-100 group-hover:bg-indigo-100 transition-colors" />
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-10">
+                  {items.map(item => (
+                    <WorkCard key={item.id} item={item} onClick={() => setSelectedWorkId(item.id)} users={users} />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const PriorityStat = ({ label, value, sub, color }: any) => (
+    <div className="bg-white/5 p-8 rounded-[2.5rem] border border-white/5 text-center flex flex-col justify-center backdrop-blur-sm transition-all hover:bg-white/10 hover:border-white/10">
+      <p className="text-[10px] font-black text-indigo-300 uppercase tracking-[0.2em] mb-3">{label}</p>
+      <p className="text-5xl font-black tracking-tighter mb-2">{value}</p>
+      <p className={`text-[10px] font-black uppercase tracking-[0.4em] ${color}`}>{sub}</p>
+    </div>
+  );
+
+  return (
+    <div className="flex min-h-screen bg-white text-gray-900 selection:bg-indigo-100 selection:text-indigo-900 font-sans tracking-tight">
+      {view !== 'login' && view !== 'signup' && <Sidebar />}
+      <main className="flex-1 flex flex-col overflow-hidden">
+        {(view !== 'login' && view !== 'signup') && (
+          <Header title={view === 'my' ? '개인 전략 보기' : (view === 'board' ? '팀 가시성 보드' : (view === 'priority' ? '전략 우선순위 엔진' : '승인 대기 인박스'))} />
+        )}
+        <div className="flex-1 overflow-y-auto no-scrollbar relative">
+          {(view === 'login' || view === 'signup') && <AuthView />}
+          {view === 'my' && <MyPage />}
+          {view === 'board' && <BoardPage />}
+          {view === 'priority' && <PriorityPage />}
+          {view === 'inbox' && <InboxPage />}
+        </div>
+      </main>
+
+      {selectedWorkId && <WorkDetailModal id={selectedWorkId} onClose={() => setSelectedWorkId(null)} />}
+
+      {/* AI Intelligence Chat Overlay */}
+      {isChatOpen && (
+        <div className="fixed bottom-10 right-10 w-[450px] h-[650px] bg-white rounded-[3rem] shadow-2xl border border-gray-100 flex flex-col z-50 animate-in slide-in-from-bottom-10">
+          <div className="p-8 border-b border-gray-50 flex items-center justify-between bg-indigo-600 rounded-t-[3rem]">
+            <div className="flex items-center gap-3">
+              <Zap className="text-white" size={20} />
+              <h3 className="text-white font-black uppercase tracking-widest text-sm">전략 어시스턴트</h3>
+            </div>
+            <button onClick={() => setIsChatOpen(false)} className="text-white/50 hover:text-white transition-colors"><X size={24} /></button>
+          </div>
+          <div className="flex-1 p-8 overflow-y-auto space-y-6 no-scrollbar">
+            <div className="bg-gray-50 p-6 rounded-2xl border border-gray-100">
+              <p className="text-sm font-bold text-gray-800 leading-relaxed uppercase">
+                안녕하세요 {currentUser?.name}님. 현재 프로젝트 클러스터 정보를 로드했습니다. 어떤 전략적 분석이 필요하신가요?
+              </p>
+            </div>
+            <div className="space-y-4">
+              <p className="text-[10px] font-black text-gray-300 uppercase tracking-widest">추천 질문</p>
+              <button className="w-full text-left p-4 rounded-xl border border-gray-100 text-xs font-black text-indigo-600 hover:bg-indigo-50 transition-all uppercase">NextGen AI 리스크 분석</button>
+              <button className="w-full text-left p-4 rounded-xl border border-gray-100 text-xs font-black text-indigo-600 hover:bg-indigo-50 transition-all uppercase">이번 주 우선순위 제조정 제안</button>
+            </div>
+          </div>
+          <div className="p-8 border-t border-gray-50 bg-gray-50/50 rounded-b-[3rem]">
+            <div className="relative">
+              <input className="w-full pl-6 pr-14 py-4 bg-white border border-gray-200 rounded-2xl focus:ring-2 focus:ring-indigo-500 font-bold outline-none shadow-sm" placeholder="AI에게 질문하세요..." />
+              <button className="absolute right-3 top-1/2 -translate-y-1/2 p-2 bg-indigo-600 text-white rounded-xl shadow-lg"><ChevronRight size={18} /></button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
