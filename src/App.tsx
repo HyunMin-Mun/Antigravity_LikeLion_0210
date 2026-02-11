@@ -4,12 +4,12 @@ import {
   addDoc,
   updateDoc,
   doc,
-  deleteDoc,
   onSnapshot,
   query,
-  where,
   setDoc,
-  Timestamp
+  getDoc,
+  writeBatch,
+  getDocs
 } from 'firebase/firestore';
 import {
   signInWithEmailAndPassword,
@@ -46,7 +46,6 @@ const STATUS = { TODO: '준비', IN_PROGRESS: '진행', DONE: '완료' } as cons
 const APPROVAL = { NONE: 'none', PENDING: 'pending', APPROVED: 'approved', REJECTED: 'rejected' } as const;
 const TYPES = ['기획', '개발', '디자인', '운영', '회의', '리서치', '문서'] as const;
 const LEVELS = { LOW: 'low', MED: 'med', HIGH: 'high' } as const;
-const API_KEY = ""; // Gemini API Key
 
 type Role = typeof ROLES[keyof typeof ROLES];
 type Status = typeof STATUS[keyof typeof STATUS];
@@ -60,6 +59,7 @@ interface User {
   email: string;
   role: Role;
   today_status: string;
+  scheduled_status?: string;
   password?: string;
 }
 
@@ -99,33 +99,41 @@ interface Weights {
 
 // --- Initial Mock Data ---
 const INITIAL_USERS: User[] = [
-  { id: 'u1', name: '김철수', email: 'chul@example.com', role: 'manager', today_status: '근무', password: '123' },
-  { id: 'u2', name: '이영희', email: 'young@example.com', role: 'member', today_status: '재택', password: '123' },
-  { id: 'u3', name: '박지민', email: 'jimin@example.com', role: 'member', today_status: '회의', password: '123' },
-  { id: 'u4', name: '최동현', email: 'dong@example.com', role: 'member', today_status: '외근', password: '123' },
-  { id: 'u5', name: '정하나', email: 'hana@example.com', role: 'member', today_status: '근무', password: '123' },
-  { id: 'u6', name: '한소리', email: 'sori@example.com', role: 'member', today_status: '휴가', password: '123' },
+  { id: 'u1', name: '김철수', email: 'manager1@demo.ai', role: 'manager', today_status: '근무', scheduled_status: '오후 전략 회의 주관', password: 'demo1234' },
+  { id: 'u2', name: '이영희', email: 'member1@demo.ai', role: 'member', today_status: '재택', scheduled_status: '오후 2시 반차 예정', password: 'demo1234' },
+  { id: 'u3', name: '박지민', email: 'jimin@demo.com', role: 'member', today_status: '회의', scheduled_status: '고객사 외근(신사동)', password: 'demo1234' },
+  { id: 'u4', name: '최동현', email: 'dong@demo.com', role: 'member', today_status: '외근', scheduled_status: '현지 퇴근 예정', password: 'demo1234' },
 ];
 
 const generateWorkItems = (): WorkItem[] => {
-  const projects = ['NextGen AI Platform', 'Global UX Renewal', 'Internal ERP System'];
-  return Array.from({ length: 20 }, (_, i): WorkItem => ({
+  const tasks = [
+    { title: "인프라 보안 프로토콜 설계", project: "NextGen AI Platform", type: "개발", status: STATUS.IN_PROGRESS, impact: LEVELS.HIGH, urgency: LEVELS.HIGH },
+    { title: "글로벌 디자인 가이드라인 수립", project: "Global UX Renewal", type: "디자인", status: STATUS.TODO, impact: LEVELS.MED, urgency: LEVELS.MED },
+    { title: "핵심 API 엔드포인트 최적화", project: "NextGen AI Platform", type: "개발", status: STATUS.IN_PROGRESS, impact: LEVELS.HIGH, urgency: LEVELS.MED },
+    { title: "ERP 데이터베이스 마이그레이션", project: "Internal ERP System", type: "운영", status: STATUS.TODO, impact: LEVELS.HIGH, urgency: LEVELS.HIGH },
+    { title: "사용자 경험 피드백 분석 보고서", project: "Global UX Renewal", type: "리서치", status: STATUS.DONE, impact: LEVELS.LOW, urgency: LEVELS.LOW },
+    { title: "신규 서비스 기획안 초안 작성", project: "NextGen AI Platform", type: "기획", status: STATUS.TODO, impact: LEVELS.MED, urgency: LEVELS.MED },
+    { title: "프론트엔드 성능 프로파일링", project: "NextGen AI Platform", type: "개발", status: STATUS.IN_PROGRESS, impact: LEVELS.HIGH, urgency: LEVELS.HIGH },
+    { title: "시스템 배포 자동화 스크립트 작성", project: "Internal ERP System", type: "운영", status: STATUS.TODO, impact: LEVELS.MED, urgency: LEVELS.LOW },
+  ];
+
+  return tasks.map((t, i): WorkItem => ({
     id: `w${i + 1}`,
-    project_name: projects[i % 3],
-    title: `TASK #${i + 1}: ${['UI 개발', 'API 설계', '데이터 분석', 'QA 테스트', '문서화'][i % 5]}`,
-    description: `이 업무는 ${projects[i % 3]} 프로젝트의 핵심 이정표를 달성하기 위한 중요한 태스크입니다. 상세 구현 및 협업이 필요합니다.`,
-    assignees: [INITIAL_USERS[(i % 5) + 1].id],
+    project_name: t.project,
+    title: t.title,
+    description: `${t.project} 프로젝트의 성공적인 목표 달성을 위해 담당자로서 수행하는 핵심 태스크입니다.`,
+    assignees: [INITIAL_USERS[i].id],
     requester: INITIAL_USERS[0].id,
     start_date: new Date().toISOString().split('T')[0],
-    due_date: new Date(Date.now() + (i * 86400000)).toISOString().split('T')[0],
-    status: i % 3 === 0 ? STATUS.DONE : (i % 2 === 0 ? STATUS.IN_PROGRESS : STATUS.TODO),
+    due_date: new Date(Date.now() + (3 * 86400000)).toISOString().split('T')[0],
+    status: t.status as Status,
     updated_at: new Date().toISOString(),
-    last_update_note: i % 4 === 0 ? "마일스톤 1단계 완료" : "진행 상황 체크 중",
-    type: TYPES[i % TYPES.length],
-    impact: i % 3 === 0 ? LEVELS.HIGH : (i % 2 === 0 ? LEVELS.MED : LEVELS.LOW),
-    urgency: i % 4 === 0 ? LEVELS.HIGH : (i % 2 === 0 ? LEVELS.MED : LEVELS.LOW),
+    last_update_note: "최초 할당됨",
+    type: t.type as WorkType,
+    impact: t.impact as Level,
+    urgency: t.urgency as Level,
     priority_score: 0,
-    approval_status: i % 7 === 0 ? APPROVAL.PENDING : APPROVAL.NONE,
+    approval_status: APPROVAL.NONE,
   }));
 };
 
@@ -201,31 +209,120 @@ export default function App() {
   const [boardViewMode, setBoardViewMode] = useState<'kanban' | 'list'>('kanban');
   const [selectedWorkId, setSelectedWorkId] = useState<string | null>(null);
   const [isChatOpen, setIsChatOpen] = useState<boolean>(false);
-  const [managerWeights, setManagerWeights] = useState<Weights>({ impact: 3, urgency: 2, deadline: 5 });
-
-  // --- Firebase 실시간 동기화 ---
+  const [managerWeights] = useState<Weights>({ impact: 3, urgency: 2, deadline: 5 });
+  const [loadingMessage, setLoadingMessage] = useState<string | null>(null);
+  const [editingUserStatus, setEditingUserStatus] = useState<User | null>(null);
+  // --- Firebase 실시간 인증 및 내비게이션 통합 리스너 컨텍스트 ---
   useEffect(() => {
-    // 1. 인증 상태 감지
     const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
       if (user) {
-        // Firestore에서 사용자 상세 정보 가져오기
-        const userDocRef = doc(db, 'users', user.uid);
-        onSnapshot(userDocRef, (docSnap) => {
-          if (docSnap.exists()) {
-            setCurrentUser({ id: user.uid, ...docSnap.data() } as User);
-            if (view === 'login' || view === 'signup') {
-              const role = docSnap.data().role;
-              setView(role === 'manager' ? 'board' : 'my');
-            }
+        setLoadingMessage("데이터베이스 연결 중...");
+        try {
+          const userDocRef = doc(db, 'users', user.uid);
+          let docSnap = await getDoc(userDocRef);
+
+          // Race condition 대응: 회원가입 직후 Firestore 문서가 아직 생성되지 않았을 수 있음
+          if (!docSnap.exists()) {
+            console.log("Firestore 문서 대기 중... (1초 후 재시도)");
+            await new Promise(resolve => setTimeout(resolve, 1500));
+            docSnap = await getDoc(userDocRef);
           }
-        });
+
+          if (docSnap.exists()) {
+            const userData = docSnap.data() as Omit<User, 'id'>;
+            const fullUser: User = { id: user.uid, ...userData };
+            setCurrentUser(fullUser);
+
+            // 로그인 상태에서만 최초 1회 강제 뷰 전환 (현재 뷰가 로그인/회원가입일 때만)
+            setView(prev => (prev === 'login' || prev === 'signup')
+              ? (fullUser.role === 'manager' ? 'board' : 'my')
+              : prev
+            );
+          } else {
+            // 문서가 여전히 없으면 기본 정보로 자동 생성
+            console.warn("Firestore 문서 자동 생성 시도...");
+            const fallbackData = {
+              name: user.email?.split('@')[0] || '사용자',
+              email: user.email || '',
+              role: 'member' as Role,
+              today_status: '근무',
+              updated_at: new Date().toISOString()
+            };
+            await setDoc(userDocRef, fallbackData);
+            const fullUser: User = { id: user.uid, ...fallbackData };
+            setCurrentUser(fullUser);
+            setView(prev => (prev === 'login' || prev === 'signup') ? 'my' : prev);
+          }
+        } catch (error) {
+          console.error("인증 처리 중 오류:", error);
+        } finally {
+          setLoadingMessage(null);
+        }
       } else {
         setCurrentUser(null);
         setView('login');
       }
     });
 
-    // 2. 업무 데이터 실시간 동기화
+    return () => unsubscribeAuth();
+  }, []);
+
+  // --- 데이터 초기 시딩 (Seed) ---
+  const seedFirestore = async () => {
+    try {
+      // 1. 업무 데이터 시딩
+      const qWork = query(collection(db, 'workItems'));
+      const snapWork = await getDocs(qWork);
+
+      // 2. 사용자 데이터 시딩 (본인 외에 팀원들이 보이도록)
+      const qUsers = query(collection(db, 'users'));
+      const snapUsers = await getDocs(qUsers);
+
+      const batch = writeBatch(db);
+      let needsCommit = false;
+
+      if (snapWork.empty) {
+        setLoadingMessage("최초 업무 데이터를 생성 중입니다...");
+        const mockItems = generateWorkItems();
+        mockItems.forEach(item => {
+          const newDocRef = doc(collection(db, 'workItems'));
+          const { id, ...itemData } = item;
+          batch.set(newDocRef, itemData);
+        });
+        needsCommit = true;
+      }
+
+      if (snapUsers.size < INITIAL_USERS.length) { // 팀원 데이터가 부족한 경우 (신규 멤버 추가 포함)
+        setLoadingMessage("팀원 데이터를 생성 중입니다...");
+        INITIAL_USERS.forEach(u => {
+          // 이미 존재하는 이메일이나 ID는 스킵하거나 덮어쓰기
+          const userRef = doc(db, 'users', u.id);
+          const { password, ...userData } = u;
+          batch.set(userRef, userData);
+        });
+        needsCommit = true;
+      }
+
+      if (needsCommit) {
+        await batch.commit();
+        setLoadingMessage(null);
+        alert("데모용 업무 및 팀원 데이터가 성공적으로 생성되었습니다.");
+      }
+    } catch (error) {
+      console.error("데이터 시딩 중 오류:", error);
+    }
+  };
+
+  useEffect(() => {
+    if (currentUser?.role === 'manager') {
+      seedFirestore();
+    }
+  }, [currentUser]);
+
+  // --- 데이터 실시간 동기화 (업무, 유저, 제안) ---
+  useEffect(() => {
+    if (!currentUser) return;
+
     const qWorkItems = query(collection(db, 'workItems'));
     const unsubscribeWork = onSnapshot(qWorkItems, (snapshot) => {
       const items = snapshot.docs.map(doc => ({
@@ -236,27 +333,24 @@ export default function App() {
       setWorkItems(items);
     });
 
-    // 3. 사용자 목록 실시간 동기화
     const unsubscribeUsers = onSnapshot(collection(db, 'users'), (snapshot) => {
       const uList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as User));
       setUsers(uList);
     });
 
-    // 4. 제안(Proposals) 실시간 동기화
     const unsubscribeProposals = onSnapshot(collection(db, 'proposals'), (snapshot) => {
       const pList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Proposal));
       setProposals(pList);
     });
 
     return () => {
-      unsubscribeAuth();
       unsubscribeWork();
       unsubscribeUsers();
       unsubscribeProposals();
     };
-  }, [managerWeights, view]);
+  }, [managerWeights, currentUser?.id]);
 
-  // 가중치 변경 시 우선순위 점수 재계산 (로컬 상태 업데이트용)
+  // 가중치 변경 시 우선순위 점수 재계산
   useEffect(() => {
     setWorkItems(prev => prev.map(item => ({
       ...item,
@@ -264,32 +358,84 @@ export default function App() {
     })));
   }, [managerWeights]);
 
-  // --- Firebase 핸들러 ---
+  // --- Firebase 핸들러 (뷰 전환 로직 제거, 리스너가 처리) ---
   const handleSignup = async (name: string, email: string, password?: string, role: Role = 'member') => {
     try {
       if (!password) return;
+      setLoadingMessage("계정 생성 중...");
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
 
-      // Firestore에 사용자 추가 정보 저장
       await setDoc(doc(db, 'users', user.uid), {
-        name,
-        email,
-        role,
+        name, email, role,
         today_status: '근무',
         updated_at: new Date().toISOString()
       });
+      // setView는 onAuthStateChanged 리스너가 처리함
     } catch (error: any) {
-      alert("회원가입 실패: " + error.message);
+      if (error.code === 'auth/email-already-in-use') {
+        await handleLogin(email, password);
+      } else {
+        alert("회원가입 실패: " + error.message);
+      }
+    } finally {
+      setLoadingMessage(null);
     }
   };
 
   const handleLogin = async (email: string, password?: string) => {
     try {
       if (!password) return;
+      setLoadingMessage("로그인 중...");
       await signInWithEmailAndPassword(auth, email, password);
     } catch (error: any) {
       alert("로그인 실패: " + error.message);
+    } finally {
+      setLoadingMessage(null);
+    }
+  };
+
+  const handleDemoLogin = async (email: string, role: Role) => {
+    setLoadingMessage("데모 모드로 접속 중입니다...");
+    const demoName = role === 'manager' ? '데모 매니저' : '데모 멤버';
+    try {
+      // 1단계: 먼저 로그인 시도
+      let userCredential;
+      try {
+        userCredential = await signInWithEmailAndPassword(auth, email, 'demo1234');
+      } catch (signInError: any) {
+        // 2단계: 로그인 실패 시 계정 생성 시도
+        try {
+          userCredential = await createUserWithEmailAndPassword(auth, email, 'demo1234');
+        } catch (signUpError: any) {
+          if (signUpError.code === 'auth/email-already-in-use') {
+            // 계정은 존재하지만 로그인 실패 — 비밀번호가 다를 수 있음
+            alert("데모 계정의 비밀번호가 변경되었을 수 있습니다. 수동으로 로그인해주세요.");
+            return;
+          }
+          throw signUpError;
+        }
+      }
+
+      // 3단계: Firestore 사용자 문서가 없으면 생성 (핵심 수정)
+      if (userCredential?.user) {
+        const userDocRef = doc(db, 'users', userCredential.user.uid);
+        const docSnap = await getDoc(userDocRef);
+        if (!docSnap.exists()) {
+          await setDoc(userDocRef, {
+            name: demoName,
+            email,
+            role,
+            today_status: '근무',
+            updated_at: new Date().toISOString()
+          });
+        }
+      }
+    } catch (error: any) {
+      console.error("데모 로그인 오류:", error);
+      alert("데모 접속 중 오류가 발생했습니다: " + (error.code || error.message));
+    } finally {
+      setLoadingMessage(null);
     }
   };
 
@@ -386,8 +532,8 @@ export default function App() {
             <div className="mt-10 pt-8 border-t border-gray-200">
               <p className="text-[10px] text-gray-400 mb-4 font-black uppercase tracking-widest text-center">데모 계정 빠른 접속</p>
               <div className="flex gap-3 justify-center">
-                <button onClick={() => handleLogin('young@example.com', '123')} className="px-4 py-2 bg-white border border-gray-100 rounded-xl text-xs font-black text-indigo-600 hover:bg-indigo-50 transition-all uppercase tracking-tighter shadow-sm">멤버 모드</button>
-                <button onClick={() => handleLogin('chul@example.com', '123')} className="px-4 py-2 bg-white border border-gray-100 rounded-xl text-xs font-black text-indigo-600 hover:bg-indigo-50 transition-all uppercase tracking-tighter shadow-sm">매니저 모드</button>
+                <button type="button" onClick={() => handleDemoLogin('member@demo.ai', 'member')} className="px-4 py-2 bg-white border border-gray-100 rounded-xl text-xs font-black text-indigo-600 hover:bg-indigo-50 transition-all uppercase tracking-tighter shadow-sm">멤버 모드</button>
+                <button type="button" onClick={() => handleDemoLogin('manager@demo.ai', 'manager')} className="px-4 py-2 bg-white border border-gray-100 rounded-xl text-xs font-black text-indigo-600 hover:bg-indigo-50 transition-all uppercase tracking-tighter shadow-sm">매니저 모드</button>
               </div>
             </div>
           </div>
@@ -408,9 +554,8 @@ export default function App() {
         <SidebarItem icon={<BarChart2 size={22} />} label="내 대시보드" active={view === 'my'} onClick={() => setView('my')} />
         <SidebarItem icon={<Layout size={22} />} label="팀 업무 보드" active={view === 'board'} onClick={() => setView('board')} />
         <SidebarItem icon={<TrendingUp size={22} />} label="전략 우선순위 엔진" active={view === 'priority'} onClick={() => setView('priority')} />
-        {currentUser?.role === ROLES.MANAGER && (
-          <SidebarItem icon={<Inbox size={22} />} label="승인 인박스" active={view === 'inbox'} onClick={() => setView('inbox')} count={proposals.filter(p => p.approval_status === 'pending').length} />
-        )}
+        <SidebarItem icon={<Inbox size={22} />} label="승인 인박스" active={view === 'inbox'} onClick={() => setView('inbox')} count={proposals.filter(p => p.approval_status === 'pending').length} />
+
       </nav>
 
       <div className="p-8 pb-12 mt-auto">
@@ -547,16 +692,16 @@ export default function App() {
                         <div className="flex items-center gap-3">
                           <div className="flex -space-x-2">
                             {item.assignees.map(aid => (
-                              <div key={aid} className="w-9 h-9 rounded-xl bg-indigo-600 border-2 border-white flex items-center justify-center text-[11px] font-black text-white shadow-md transition-transform hover:scale-110" title={users.find(u => u.id === aid)?.name}>
-                                {users.find(u => u.id === aid)?.name.charAt(0)}
+                              <div key={aid} className="w-9 h-9 rounded-xl bg-indigo-600 border-2 border-white flex items-center justify-center text-[11px] font-black text-white shadow-md transition-transform hover:scale-110" title={users.find((u: User) => u.id === aid)?.name}>
+                                {users.find((u: User) => u.id === aid)?.name?.charAt(0)}
                               </div>
                             ))}
                           </div>
                           {item.assignees.length > 0 && (
                             <span className="text-xs font-black text-gray-500 uppercase tracking-tighter">
                               {item.assignees.length === 1
-                                ? users.find(u => u.id === item.assignees[0])?.name
-                                : `${users.find(u => u.id === item.assignees[0])?.name} 외 ${item.assignees.length - 1}명`}
+                                ? users.find((u: User) => u.id === item.assignees[0])?.name
+                                : `${users.find((u: User) => u.id === item.assignees[0])?.name} 외 ${item.assignees.length - 1}명`}
                             </span>
                           )}
                         </div>
@@ -625,8 +770,8 @@ export default function App() {
           {item.assignees.length > 0 && (
             <span className="text-[11px] font-black text-gray-500 uppercase tracking-tighter">
               {item.assignees.length === 1
-                ? users.find(u => u.id === item.assignees[0])?.name
-                : `${users.find(u => u.id === item.assignees[0])?.name}+`}
+                ? users.find((u: User) => u.id === item.assignees[0])?.name
+                : `${users.find((u: User) => u.id === item.assignees[0])?.name}+`}
             </span>
           )}
         </div>
@@ -651,6 +796,52 @@ export default function App() {
           <StatCard title="진행 중인 업무" value={myTasks.filter(t => t.status !== STATUS.DONE).length} icon={<Clock className="text-white" />} color="bg-yellow-500" />
           <StatCard title="고영향도 업무" value={myTasks.filter(t => t.impact === 'high').length} icon={<TrendingUp className="text-white" />} color="bg-red-500" />
         </div>
+
+        {/* --- Team Attendance Section --- */}
+        <section className="bg-white rounded-[4rem] shadow-2xl shadow-gray-200/50 border border-gray-100 overflow-hidden">
+          <div className="p-12 border-b border-gray-100 flex items-center justify-between">
+            <div>
+              <h2 className="text-3xl font-black text-gray-900 tracking-tighter uppercase">팀원 전략적 근태 현황</h2>
+              <p className="text-xs font-bold text-gray-300 tracking-[0.2em] mt-2 uppercase">현재 상황 및 예정 계획 실시간 동기화</p>
+            </div>
+            <div className="flex -space-x-3">
+              {users.slice(0, 5).map(u => (
+                <div key={u.id} className="w-10 h-10 rounded-xl bg-gray-50 border-2 border-white flex items-center justify-center text-[10px] font-black text-gray-400 shadow-sm">
+                  {u.name.charAt(0)}
+                </div>
+              ))}
+              {users.length > 5 && <div className="w-10 h-10 rounded-xl bg-indigo-50 border-2 border-white flex items-center justify-center text-[10px] font-black text-indigo-600">+{users.length - 5}</div>}
+            </div>
+          </div>
+          <div className="p-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 bg-gray-50/30">
+            {users.map(user => {
+              const canEdit = currentUser?.id === user.id || currentUser?.role === 'manager';
+              return (
+                <div key={user.id}
+                  onClick={() => canEdit && setEditingUserStatus(user)}
+                  className={`bg-white p-6 rounded-3xl border border-gray-100 flex items-center gap-6 shadow-sm transition-all hover:shadow-xl group ${canEdit ? 'cursor-pointer hover:border-indigo-200' : 'cursor-default'}`}>
+                  <div className={`w-16 h-16 rounded-2xl flex items-center justify-center text-xl font-black text-white shadow-lg transition-transform group-hover:scale-110 ${user.today_status === '휴가' ? 'bg-red-400' : (user.today_status === '재택' ? 'bg-purple-500' : 'bg-indigo-600')
+                    }`}>
+                    {user.name.charAt(0)}
+                  </div>
+                  <div className="flex-1 overflow-hidden">
+                    <div className="flex items-center justify-between mb-1">
+                      <p className="font-black text-gray-900 tracking-tight flex items-center gap-2">
+                        {user.name}
+                        {canEdit && <span className="opacity-0 group-hover:opacity-100 text-[10px] text-indigo-400">신원 확인됨</span>}
+                      </p>
+                      <Badge color={user.today_status === '근무' ? 'green' : (user.today_status === '휴가' ? 'red' : 'indigo')}>{user.today_status}</Badge>
+                    </div>
+                    <div className="flex items-center gap-2 text-xs font-bold text-gray-400">
+                      <Calendar size={12} className="text-gray-300" />
+                      <span className="truncate italic">계획: {user.scheduled_status || '특이사항 없음'}</span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
 
         <section className="bg-white rounded-[4rem] shadow-2xl shadow-gray-200/50 border border-gray-100 overflow-hidden transition-all hover:border-indigo-100">
           <div className="p-12 border-b border-gray-100 flex items-center justify-between bg-white">
@@ -1001,6 +1192,7 @@ export default function App() {
       </main>
 
       {selectedWorkId && <WorkDetailModal id={selectedWorkId} onClose={() => setSelectedWorkId(null)} />}
+      {editingUserStatus && <UserStatusModal user={editingUserStatus} onClose={() => setEditingUserStatus(null)} />}
 
       {/* AI Intelligence Chat Overlay */}
       {isChatOpen && (
@@ -1032,6 +1224,84 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* 실시간 로딩 토스트 알림 */}
+      {loadingMessage && (
+        <div className="fixed top-10 left-1/2 -translate-x-1/2 z-[100] animate-in fade-in slide-in-from-top-4 duration-300">
+          <div className="bg-indigo-900/90 backdrop-blur-xl text-white px-8 py-5 rounded-3xl shadow-2xl flex items-center gap-4 border border-indigo-500/30">
+            <div className="w-5 h-5 border-3 border-indigo-400 border-t-white rounded-full animate-spin" />
+            <p className="text-sm font-black uppercase tracking-tight">{loadingMessage}</p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
+const UserStatusModal = ({ user, onClose }: { user: User, onClose: () => void }) => {
+  const [status, setStatus] = useState(user.today_status);
+  const [note, setNote] = useState(user.scheduled_status || '');
+  const [loading, setLoading] = useState(false);
+
+  const handleUpdate = async () => {
+    try {
+      setLoading(true);
+      const userRef = doc(db, 'users', user.id);
+      await updateDoc(userRef, {
+        today_status: status,
+        scheduled_status: note,
+        updated_at: new Date().toISOString()
+      });
+      onClose();
+    } catch (error) {
+      console.error("상태 업데이트 실패:", error);
+      alert("상태 수정 권한이 없거나 오류가 발생했습니다.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-6 animate-in fade-in duration-300">
+      <div className="bg-white w-full max-w-lg rounded-[3rem] shadow-2xl overflow-hidden border border-gray-100">
+        <div className="p-10 border-b border-gray-50 flex items-center justify-between bg-indigo-600">
+          <h3 className="text-2xl font-black text-white tracking-tighter uppercase">{user.name} 근태 정보 수정</h3>
+          <button onClick={onClose} className="text-white/50 hover:text-white transition-colors"><X size={24} /></button>
+        </div>
+        <div className="p-10 space-y-8">
+          <div className="space-y-4">
+            <label className="text-xs font-black text-gray-300 uppercase tracking-[0.3em] block ml-1">현재 상태</label>
+            <div className="flex flex-wrap gap-2">
+              {['근무', '재택', '회의', '외근', '휴가'].map(s => (
+                <button
+                  key={s}
+                  onClick={() => setStatus(s)}
+                  className={`px-6 py-3 rounded-2xl text-xs font-black transition-all border-2 ${status === s
+                    ? 'bg-indigo-600 border-indigo-600 text-white shadow-lg'
+                    : 'bg-white border-gray-100 text-gray-400 hover:border-indigo-100'}`}
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="space-y-4">
+            <label className="text-xs font-black text-gray-300 uppercase tracking-[0.3em] block ml-1">예정 계획 / 특이사항</label>
+            <input
+              className="w-full px-8 py-5 bg-gray-50 border-transparent border focus:border-indigo-100 rounded-2xl focus:ring-4 focus:ring-indigo-500/5 font-bold outline-none shadow-inner transition-all"
+              value={note}
+              onChange={e => setNote(e.target.value)}
+              placeholder="예) 오후 2시 반차 예정, 신사동 외근 등"
+            />
+          </div>
+        </div>
+        <div className="p-10 bg-gray-50 flex justify-end gap-4">
+          <Button variant="ghost" onClick={onClose} className="px-10 py-4">취소</Button>
+          <Button onClick={handleUpdate} disabled={loading} className="px-12 py-4 shadow-indigo-200">
+            {loading ? '저장 중...' : '데이터 업데이트'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+};
