@@ -1,5 +1,24 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
+  collection,
+  addDoc,
+  updateDoc,
+  doc,
+  deleteDoc,
+  onSnapshot,
+  query,
+  where,
+  setDoc,
+  Timestamp
+} from 'firebase/firestore';
+import {
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signOut,
+  onAuthStateChanged
+} from 'firebase/auth';
+import { db, auth } from './lib/firebase';
+import {
   Layout,
   CheckSquare,
   Inbox,
@@ -173,7 +192,7 @@ const Badge: React.FC<BadgeProps> = ({ children, color = 'gray' }) => {
 
 // --- Main App Component ---
 export default function App() {
-  const [users, setUsers] = useState<User[]>(INITIAL_USERS);
+  const [users, setUsers] = useState<User[]>([]);
   const [workItems, setWorkItems] = useState<WorkItem[]>([]);
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -184,21 +203,60 @@ export default function App() {
   const [isChatOpen, setIsChatOpen] = useState<boolean>(false);
   const [managerWeights, setManagerWeights] = useState<Weights>({ impact: 3, urgency: 2, deadline: 5 });
 
-  // 데이터 초기화
+  // --- Firebase 실시간 동기화 ---
   useEffect(() => {
-    const initialItems: WorkItem[] = generateWorkItems().map(item => ({
-      ...item,
-      priority_score: getPriorityScore(item.impact, item.urgency, item.due_date, managerWeights)
-    }));
-    setWorkItems(initialItems);
+    // 1. 인증 상태 감지
+    const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        // Firestore에서 사용자 상세 정보 가져오기
+        const userDocRef = doc(db, 'users', user.uid);
+        onSnapshot(userDocRef, (docSnap) => {
+          if (docSnap.exists()) {
+            setCurrentUser({ id: user.uid, ...docSnap.data() } as User);
+            if (view === 'login' || view === 'signup') {
+              const role = docSnap.data().role;
+              setView(role === 'manager' ? 'board' : 'my');
+            }
+          }
+        });
+      } else {
+        setCurrentUser(null);
+        setView('login');
+      }
+    });
 
-    setProposals([
-      { id: 'p1', suggestion_text: '인력 재배치 제안', explanation: 'AI 프로젝트 마감이 임박하여 디자인 인력을 기획 지원으로 이동할 것을 제안합니다.', created_at: new Date().toISOString(), created_by: 'u1', approval_status: 'pending' },
-      { id: 'p2', suggestion_text: '회의 통합 제안', explanation: '중복되는 운영 회의를 주 1회로 통합하여 개발 시간을 확보하세요.', created_at: new Date().toISOString(), created_by: 'u1', approval_status: 'pending' }
-    ]);
-  }, []);
+    // 2. 업무 데이터 실시간 동기화
+    const qWorkItems = query(collection(db, 'workItems'));
+    const unsubscribeWork = onSnapshot(qWorkItems, (snapshot) => {
+      const items = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+        priority_score: getPriorityScore(doc.data().impact || 'low', doc.data().urgency || 'low', doc.data().due_date || new Date().toISOString(), managerWeights)
+      } as WorkItem));
+      setWorkItems(items);
+    });
 
-  // 가중치 변경 시 우선순위 점수 동기화
+    // 3. 사용자 목록 실시간 동기화
+    const unsubscribeUsers = onSnapshot(collection(db, 'users'), (snapshot) => {
+      const uList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as User));
+      setUsers(uList);
+    });
+
+    // 4. 제안(Proposals) 실시간 동기화
+    const unsubscribeProposals = onSnapshot(collection(db, 'proposals'), (snapshot) => {
+      const pList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Proposal));
+      setProposals(pList);
+    });
+
+    return () => {
+      unsubscribeAuth();
+      unsubscribeWork();
+      unsubscribeUsers();
+      unsubscribeProposals();
+    };
+  }, [managerWeights, view]);
+
+  // 가중치 변경 시 우선순위 점수 재계산 (로컬 상태 업데이트용)
   useEffect(() => {
     setWorkItems(prev => prev.map(item => ({
       ...item,
@@ -206,52 +264,72 @@ export default function App() {
     })));
   }, [managerWeights]);
 
-  // --- 핸들러 ---
-  const handleSignup = (name: string, email: string, password?: string, role: Role = 'member') => {
-    const newUser: User = { id: `u${Date.now()}`, name, email, password, role, today_status: '근무' };
-    setUsers([...users, newUser]);
-    setCurrentUser(newUser);
-    setView(role === ROLES.MANAGER ? 'board' : 'my');
-  };
-  const handleLogin = (email: string, password?: string) => {
-    const user = users.find(u => u.email === email && (!password || u.password === password));
-    if (user) {
-      setCurrentUser(user);
-      setView(user.role === ROLES.MANAGER ? 'board' : 'my');
-    } else {
-      alert("이메일 또는 비밀번호가 잘못되었습니다.");
+  // --- Firebase 핸들러 ---
+  const handleSignup = async (name: string, email: string, password?: string, role: Role = 'member') => {
+    try {
+      if (!password) return;
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      const user = userCredential.user;
+
+      // Firestore에 사용자 추가 정보 저장
+      await setDoc(doc(db, 'users', user.uid), {
+        name,
+        email,
+        role,
+        today_status: '근무',
+        updated_at: new Date().toISOString()
+      });
+    } catch (error: any) {
+      alert("회원가입 실패: " + error.message);
     }
   };
 
-  const handleLogout = () => {
-    setCurrentUser(null);
-    setView('login');
+  const handleLogin = async (email: string, password?: string) => {
+    try {
+      if (!password) return;
+      await signInWithEmailAndPassword(auth, email, password);
+    } catch (error: any) {
+      alert("로그인 실패: " + error.message);
+    }
   };
 
-  const updateWorkItem = (id: string, data: Partial<WorkItem>) => {
-    setWorkItems(prev => prev.map(item => item.id === id ? { ...item, ...data, updated_at: new Date().toISOString() } : item));
+  const handleLogout = async () => {
+    await signOut(auth);
   };
 
-  const addWorkItem = (data: Partial<WorkItem>) => {
-    const newItem: WorkItem = {
-      id: `w${Date.now()}`,
-      project_name: data.project_name || 'Unassigned',
-      title: data.title || 'Untitled Task',
-      description: data.description || '',
-      type: data.type || '개발',
-      assignees: data.assignees || [currentUser?.id || ''],
-      requester: currentUser?.id || '',
-      start_date: new Date().toISOString().split('T')[0],
-      due_date: data.due_date || new Date().toISOString().split('T')[0],
-      status: data.status || STATUS.TODO,
-      impact: data.impact || LEVELS.MED,
-      urgency: data.urgency || LEVELS.MED,
-      priority_score: getPriorityScore(data.impact || LEVELS.MED, data.urgency || LEVELS.MED, data.due_date || new Date().toISOString().split('T')[0], managerWeights),
-      approval_status: APPROVAL.NONE,
-      updated_at: new Date().toISOString(),
-      last_update_note: '태스크 생성됨'
-    };
-    setWorkItems([newItem, ...workItems]);
+  const addWorkItem = async (data: Partial<WorkItem>) => {
+    try {
+      await addDoc(collection(db, 'workItems'), {
+        project_name: data.project_name || '미지정 프로젝트',
+        title: data.title || '제목 없는 업무',
+        description: data.description || '',
+        type: data.type || '개발',
+        assignees: data.assignees || [currentUser?.id || ''],
+        requester: currentUser?.id || '',
+        start_date: new Date().toISOString().split('T')[0],
+        due_date: data.due_date || new Date().toISOString().split('T')[0],
+        status: data.status || STATUS.TODO,
+        impact: data.impact || LEVELS.MED,
+        urgency: data.urgency || LEVELS.MED,
+        approval_status: APPROVAL.NONE,
+        updated_at: new Date().toISOString(),
+        last_update_note: '신규 업무 생성됨'
+      });
+    } catch (error: any) {
+      console.error("업무 추가 실패:", error);
+    }
+  };
+
+  const updateWorkItem = async (id: string, data: Partial<WorkItem>) => {
+    try {
+      const docRef = doc(db, 'workItems', id);
+      await updateDoc(docRef, {
+        ...data,
+        updated_at: new Date().toISOString()
+      });
+    } catch (error: any) {
+      console.error("업무 수정 실패:", error);
+    }
   };
 
   // --- UI Components ---
