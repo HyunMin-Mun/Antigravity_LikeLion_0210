@@ -3,9 +3,11 @@ import {
   collection,
   addDoc,
   updateDoc,
+  deleteDoc,
   doc,
   onSnapshot,
   query,
+  orderBy,
   setDoc,
   getDoc,
   writeBatch,
@@ -18,6 +20,7 @@ import {
   onAuthStateChanged
 } from 'firebase/auth';
 import { db, auth } from './lib/firebase';
+import { generateStrategyResponse, processLearningInput } from './lib/gemini';
 import {
   Layout,
   CheckSquare,
@@ -37,7 +40,9 @@ import {
   ChevronDown,
   Calendar,
   MoreVertical,
-  AlertCircle
+  AlertCircle,
+  BookOpen,
+  Trash2
 } from 'lucide-react';
 
 // --- Constants & Types ---
@@ -212,6 +217,14 @@ export default function App() {
   const [managerWeights] = useState<Weights>({ impact: 3, urgency: 2, deadline: 5 });
   const [loadingMessage, setLoadingMessage] = useState<string | null>(null);
   const [editingUserStatus, setEditingUserStatus] = useState<User | null>(null);
+  const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'ai'; text: string }[]>([]);
+  const [chatInput, setChatInput] = useState('');
+  const [isChatLoading, setIsChatLoading] = useState(false);
+  // AI 학습 채팅방 (매니저 전용)
+  const [isLearningOpen, setIsLearningOpen] = useState(false);
+  const [learningInput, setLearningInput] = useState('');
+  const [isLearningLoading, setIsLearningLoading] = useState(false);
+  const [aiDirectives, setAiDirectives] = useState<{ id: string; text: string; createdAt: string; summary: string }[]>([]);
   // --- Firebase 실시간 인증 및 내비게이션 통합 리스너 컨텍스트 ---
   useEffect(() => {
     const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
@@ -344,10 +357,23 @@ export default function App() {
       setProposals(pList);
     });
 
+    // AI 학습 방향성 실시간 구독
+    const qDirectives = query(collection(db, 'ai_directives'), orderBy('createdAt', 'desc'));
+    const unsubscribeDirectives = onSnapshot(qDirectives, (snapshot) => {
+      const dList = snapshot.docs.map(d => ({
+        id: d.id,
+        text: d.data().text || '',
+        summary: d.data().summary || '',
+        createdAt: d.data().createdAt || '',
+      }));
+      setAiDirectives(dList);
+    });
+
     return () => {
       unsubscribeWork();
       unsubscribeUsers();
       unsubscribeProposals();
+      unsubscribeDirectives();
     };
   }, [managerWeights, currentUser?.id]);
 
@@ -544,32 +570,30 @@ export default function App() {
   };
 
   const Sidebar = () => (
-    <aside className="w-80 bg-white border-r border-gray-50 h-screen flex flex-col sticky top-0 overflow-hidden">
-      <div className="p-10 flex items-center gap-4">
-        <div className="bg-indigo-600 p-2.5 rounded-2xl shadow-xl shadow-indigo-100">
-          <CheckSquare className="text-white w-6 h-6" />
+    <aside className="w-60 bg-white border-r border-gray-50 h-screen flex flex-col sticky top-0 overflow-hidden">
+      <div className="p-5 flex items-center gap-3">
+        <div className="bg-indigo-600 p-2 rounded-xl shadow-lg shadow-indigo-100">
+          <CheckSquare className="text-white w-5 h-5" />
         </div>
-        <span className="text-3xl font-black tracking-tighter text-gray-900 group cursor-default">WorkFlow</span>
+        <span className="text-xl font-black tracking-tighter text-gray-900">WorkFlow</span>
       </div>
-      <nav className="flex-1 px-6 space-y-3 mt-4">
-        <SidebarItem icon={<BarChart2 size={22} />} label="내 대시보드" active={view === 'my'} onClick={() => setView('my')} />
-        <SidebarItem icon={<Layout size={22} />} label="팀 업무 보드" active={view === 'board'} onClick={() => setView('board')} />
-        <SidebarItem icon={<TrendingUp size={22} />} label="전략 우선순위 엔진" active={view === 'priority'} onClick={() => setView('priority')} />
-        <SidebarItem icon={<Inbox size={22} />} label="승인 인박스" active={view === 'inbox'} onClick={() => setView('inbox')} count={proposals.filter(p => p.approval_status === 'pending').length} />
-
+      <nav className="flex-1 px-4 space-y-1 mt-2">
+        <SidebarItem icon={<BarChart2 size={18} />} label="내 대시보드" active={view === 'my'} onClick={() => setView('my')} />
+        <SidebarItem icon={<Layout size={18} />} label="팀 업무 보드" active={view === 'board'} onClick={() => setView('board')} />
+        <SidebarItem icon={<TrendingUp size={18} />} label="전략 우선순위 엔진" active={view === 'priority'} onClick={() => setView('priority')} />
+        <SidebarItem icon={<Inbox size={18} />} label="승인 인박스" active={view === 'inbox'} onClick={() => setView('inbox')} count={proposals.filter(p => p.approval_status === 'pending').length} />
       </nav>
-
-      <div className="p-8 pb-12 mt-auto">
-        <div className="bg-gray-50 p-6 rounded-[2.5rem] border border-gray-100 relative group transition-all hover:bg-white hover:shadow-2xl">
-          <div className="flex items-center gap-4">
-            <div className="w-14 h-14 rounded-2xl bg-indigo-600 text-white flex items-center justify-center font-black text-2xl shadow-xl shadow-indigo-100 group-hover:scale-110 transition-transform">
+      <div className="p-4 pb-6 mt-auto">
+        <div className="bg-gray-50 p-4 rounded-2xl border border-gray-100 relative group transition-all hover:bg-white hover:shadow-lg">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center font-bold text-lg shadow-lg shadow-indigo-100 group-hover:scale-105 transition-transform">
               {currentUser?.name?.charAt(0)}
             </div>
             <div className="flex-1 overflow-hidden">
-              <p className="text-base font-black text-gray-900 truncate tracking-tight">{currentUser?.name}</p>
-              <p className="text-[10px] text-gray-400 font-extrabold uppercase tracking-[0.2em]">{currentUser?.role}</p>
+              <p className="text-sm font-bold text-gray-900 truncate">{currentUser?.name}</p>
+              <p className="text-[10px] text-gray-400 font-semibold uppercase tracking-wider">{currentUser?.role}</p>
             </div>
-            <button onClick={handleLogout} className="text-gray-300 hover:text-red-500 transition-colors p-3 hover:bg-white rounded-xl shadow-sm"><LogOut size={20} /></button>
+            <button onClick={handleLogout} className="text-gray-300 hover:text-red-500 transition-colors p-2 hover:bg-white rounded-lg"><LogOut size={16} /></button>
           </div>
         </div>
       </div>
@@ -577,31 +601,35 @@ export default function App() {
   );
 
   const SidebarItem = ({ icon, label, active, onClick, count }: { icon: React.ReactNode, label: string, active: boolean, onClick: () => void, count?: number }) => (
-    <button onClick={onClick} className={`w-full flex items-center gap-5 px-5 py-4 rounded-2xl text-[15px] font-bold transition-all relative group ${active ? 'bg-indigo-600 text-white shadow-2xl shadow-indigo-100 translate-x-1' : 'text-gray-400 hover:bg-indigo-50 hover:text-indigo-600'}`}>
+    <button onClick={onClick} className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all relative group ${active ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100' : 'text-gray-400 hover:bg-indigo-50 hover:text-indigo-600'}`}>
       {icon}
-      <span className="flex-1 text-left tracking-tight">{label}</span>
-      {count !== undefined && count > 0 && <span className={`px-2.5 py-1 rounded-full text-[10px] font-black ${active ? 'bg-white text-indigo-600' : 'bg-red-500 text-white animate-pulse shadow-lg shadow-red-200'}`}>{count}</span>}
+      <span className="flex-1 text-left">{label}</span>
+      {count !== undefined && count > 0 && <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${active ? 'bg-white text-indigo-600' : 'bg-red-500 text-white animate-pulse shadow-sm shadow-red-200'}`}>{count}</span>}
     </button>
   );
 
   const Header = ({ title }: { title: string }) => (
-    <header className="h-24 bg-white/90 backdrop-blur-xl flex items-center justify-between px-12 sticky top-0 z-20 border-b border-gray-50 shadow-sm">
+    <header className="h-14 bg-white/90 backdrop-blur-xl flex items-center justify-between px-6 sticky top-0 z-20 border-b border-gray-50 shadow-sm">
       <div>
-        <h1 className="text-3xl font-black text-gray-900 tracking-tighter uppercase">{title}</h1>
-        <p className="text-xs font-bold text-gray-300 tracking-[0.1em] mt-1">실시간 협업 데이터</p>
+        <h1 className="text-lg font-bold text-gray-900 tracking-tight">{title}</h1>
       </div>
-      <div className="flex items-center gap-8">
+      <div className="flex items-center gap-4">
         <div className="relative group">
-          <Search className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-300 group-focus-within:text-indigo-500 transition-colors" size={20} />
-          <input className="pl-14 pr-8 py-3.5 bg-gray-50 border-transparent border focus:border-indigo-100 rounded-full text-sm font-bold w-80 focus:ring-4 focus:ring-indigo-500/5 shadow-inner transition-all outline-none uppercase tracking-tighter" placeholder="업무, 팀원 검색..." />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-300 group-focus-within:text-indigo-500 transition-colors" size={16} />
+          <input className="pl-9 pr-4 py-2 bg-gray-50 border-transparent border focus:border-indigo-100 rounded-lg text-sm font-medium w-56 focus:ring-2 focus:ring-indigo-500/10 shadow-inner transition-all outline-none" placeholder="업무, 팀원 검색..." />
         </div>
-        <div className="flex items-center gap-4">
-          <Button onClick={() => setSelectedWorkId('new')} variant="indigo" className="px-6 py-3.5 rounded-full text-xs font-black uppercase tracking-widest">
-            <Plus size={18} /> 업무 추가
+        <div className="flex items-center gap-2">
+          <Button onClick={() => setSelectedWorkId('new')} variant="indigo" className="px-4 py-2 rounded-lg text-xs font-bold">
+            <Plus size={14} /> 업무 추가
           </Button>
-          <Button onClick={() => setIsChatOpen(true)} className="px-6 py-3.5 rounded-full text-xs font-black uppercase tracking-widest">
-            <Zap size={16} /> 전략 분석
+          <Button onClick={() => setIsChatOpen(true)} className="px-4 py-2 rounded-lg text-xs font-bold">
+            <Zap size={14} /> 전략 분석
           </Button>
+          {currentUser?.role === ROLES.MANAGER && (
+            <Button onClick={() => setIsLearningOpen(true)} className="px-4 py-2 rounded-lg text-xs font-bold bg-amber-500 text-white hover:bg-amber-600 border-amber-500">
+              <BookOpen size={14} /> AI 학습
+            </Button>
+          )}
         </div>
       </div>
     </header>
@@ -621,8 +649,8 @@ export default function App() {
     const columns = [STATUS.TODO, STATUS.IN_PROGRESS, STATUS.DONE];
 
     return (
-      <div className="p-12 space-y-10 flex flex-col h-full bg-gray-50/30 overflow-hidden">
-        <div className="flex items-center justify-between bg-white p-6 rounded-[2.5rem] shadow-sm border border-gray-50">
+      <div className="p-5 space-y-4 flex flex-col h-full bg-gray-50/30 overflow-hidden">
+        <div className="flex items-center justify-between bg-white p-4 rounded-xl shadow-sm border border-gray-50">
           <div className="flex items-center gap-10">
             <div className="flex items-center gap-4">
               <div className="bg-indigo-50 p-2.5 rounded-xl text-indigo-600 shadow-sm"><Filter size={20} /></div>
@@ -644,31 +672,31 @@ export default function App() {
         </div>
 
         {boardViewMode === 'kanban' ? (
-          <div className="flex-1 flex gap-10 overflow-x-auto no-scrollbar pb-10">
+          <div className="flex-1 flex gap-4 overflow-x-auto no-scrollbar pb-4">
             {columns.map(col => (
-              <div key={col} className="w-[420px] flex flex-col gap-6 flex-shrink-0">
-                <div className="flex items-center justify-between px-6 bg-white/50 py-3 rounded-2xl border border-white/80">
-                  <h3 className="text-xl font-black text-gray-900 tracking-tight flex items-center gap-3">
+              <div key={col} className="w-[320px] flex flex-col gap-3 flex-shrink-0">
+                <div className="flex items-center justify-between px-3 bg-white/50 py-2 rounded-lg border border-white/80">
+                  <h3 className="text-sm font-bold text-gray-900 flex items-center gap-2">
                     {col}
-                    <span className="text-xs font-black bg-indigo-600 text-white px-3 py-1.5 rounded-full shadow-lg shadow-indigo-100">
+                    <span className="text-[10px] font-bold bg-indigo-600 text-white px-2 py-0.5 rounded-full shadow-sm">
                       {filteredItems.filter(i => i.status === col).length}
                     </span>
                   </h3>
-                  <MoreVertical size={20} className="text-gray-300 hover:text-gray-600 cursor-pointer" />
+                  <MoreVertical size={16} className="text-gray-300 hover:text-gray-600 cursor-pointer" />
                 </div>
-                <div className="flex-1 bg-white/30 rounded-[3rem] p-6 space-y-6 overflow-y-auto no-scrollbar border border-white/50 backdrop-blur-sm shadow-inner transition-all hover:bg-white/40">
+                <div className="flex-1 bg-white/30 rounded-xl p-3 space-y-3 overflow-y-auto no-scrollbar border border-white/50 backdrop-blur-sm shadow-inner">
                   {filteredItems.filter(i => i.status === col).map(item => (
                     <WorkCard key={item.id} item={item} onClick={() => setSelectedWorkId(item.id)} users={users} />
                   ))}
-                  <button onClick={() => setSelectedWorkId('new')} className="w-full py-6 border-2 border-dashed border-gray-200 rounded-[2rem] text-gray-300 hover:text-indigo-600 hover:border-indigo-300 hover:bg-indigo-50/30 transition-all flex items-center justify-center gap-3 font-black text-sm uppercase tracking-widest group">
-                    <Plus size={24} className="group-hover:rotate-90 transition-transform" /> 업무 추가
+                  <button onClick={() => setSelectedWorkId('new')} className="w-full py-3 border-2 border-dashed border-gray-200 rounded-xl text-gray-300 hover:text-indigo-600 hover:border-indigo-300 hover:bg-indigo-50/30 transition-all flex items-center justify-center gap-2 font-bold text-xs group">
+                    <Plus size={16} className="group-hover:rotate-90 transition-transform" /> 업무 추가
                   </button>
                 </div>
               </div>
             ))}
           </div>
         ) : (
-          <div className="flex-1 bg-white rounded-[3rem] border border-gray-100 shadow-xl shadow-gray-100/50 overflow-hidden flex flex-col">
+          <div className="flex-1 bg-white rounded-xl border border-gray-100 shadow-lg overflow-hidden flex flex-col">
             <div className="overflow-y-auto flex-1 no-scrollbar">
               <table className="w-full text-left">
                 <thead className="sticky top-0 bg-white/90 backdrop-blur-xl z-10 border-b border-gray-100">
@@ -744,45 +772,41 @@ export default function App() {
   );
 
   const WorkCard = ({ item, onClick, users }: any) => (
-    <div className="bg-white p-10 rounded-[2.5rem] shadow-[0_8px_30px_rgb(0,0,0,0.04)] hover:shadow-2xl hover:shadow-indigo-100/50 hover:-translate-y-3 transition-all cursor-pointer border border-gray-50/50 hover:border-indigo-100 group relative" onClick={onClick}>
-      <div className="flex justify-between items-start mb-6">
+    <div className="bg-white p-4 rounded-xl shadow-sm hover:shadow-lg hover:shadow-indigo-50 hover:-translate-y-1 transition-all cursor-pointer border border-gray-50 hover:border-indigo-100 group relative" onClick={onClick}>
+      <div className="flex justify-between items-start mb-2">
         <Badge color={item.impact === 'high' ? 'red' : (item.impact === 'med' ? 'indigo' : 'gray')}>{item.type}</Badge>
-        <div className="flex items-center gap-3">
-          {item.approval_status === 'pending' && <div className="w-3 h-3 bg-yellow-400 rounded-full animate-ping shadow-[0_0_12px_rgba(250,204,21,0.5)]" />}
-          <span className="text-xl font-black text-gray-900 tabular-nums tracking-tighter">{Math.round(item.priority_score)}</span>
+        <div className="flex items-center gap-2">
+          {item.approval_status === 'pending' && <div className="w-2 h-2 bg-yellow-400 rounded-full animate-ping" />}
+          <span className="text-sm font-bold text-gray-900 tabular-nums">{Math.round(item.priority_score)}</span>
         </div>
       </div>
-      <h4 className="text-xl font-black text-gray-900 mb-4 leading-tight group-hover:text-indigo-600 transition-colors tracking-tight uppercase">{item.title}</h4>
-      <p className="text-base text-gray-400 font-bold line-clamp-2 mb-10 leading-relaxed uppercase tracking-tight">{item.description}</p>
-
-      <div className="flex items-center justify-between pt-8 border-t border-gray-100">
-        <div className="flex items-center gap-3">
-          <div className="flex -space-x-4">
+      <h4 className="text-sm font-bold text-gray-900 mb-1 leading-snug group-hover:text-indigo-600 transition-colors">{item.title}</h4>
+      <p className="text-xs text-gray-400 font-medium line-clamp-2 mb-4 leading-relaxed">{item.description}</p>
+      <div className="flex items-center justify-between pt-3 border-t border-gray-50">
+        <div className="flex items-center gap-2">
+          <div className="flex -space-x-2">
             {item.assignees.map((aid: string) => {
               const u = users.find((usr: User) => usr.id === aid);
               return (
-                <div key={aid} className="w-12 h-12 rounded-2xl bg-indigo-600 border-4 border-white flex items-center justify-center text-sm font-black text-white shadow-xl shadow-indigo-100 transition-transform hover:scale-125 hover:z-10 group/avatar">
+                <div key={aid} className="w-7 h-7 rounded-lg bg-indigo-600 border-2 border-white flex items-center justify-center text-[10px] font-bold text-white shadow-sm" title={u?.name}>
                   {u?.name?.charAt(0)}
-                  <div className="absolute -top-10 left-1/2 -translate-x-1/2 bg-gray-900 text-white text-[10px] px-3 py-1 rounded-lg opacity-0 group-hover/avatar:opacity-100 transition-opacity whitespace-nowrap z-20 pointer-events-none uppercase font-black tracking-widest">{u?.name}</div>
                 </div>
               );
             })}
           </div>
           {item.assignees.length > 0 && (
-            <span className="text-[11px] font-black text-gray-500 uppercase tracking-tighter">
+            <span className="text-[10px] font-semibold text-gray-400">
               {(() => {
                 const firstName = users.find((u: User) => u.id === item.assignees[0])?.name;
                 if (!firstName) return '';
-                return item.assignees.length === 1
-                  ? firstName
-                  : `${firstName} 외 ${item.assignees.length - 1}명`;
+                return item.assignees.length === 1 ? firstName : `${firstName} 외 ${item.assignees.length - 1}명`;
               })()}
             </span>
           )}
         </div>
-        <div className="flex items-center gap-3 bg-gray-50 px-4 py-2.5 rounded-full border border-gray-100 shadow-inner group-hover:bg-white transition-colors">
-          <Calendar size={16} className="text-indigo-600" />
-          <span className="text-xs font-black text-gray-500 uppercase tracking-widest">{formatDate(item.due_date)}</span>
+        <div className="flex items-center gap-1.5 bg-gray-50 px-2.5 py-1 rounded-md border border-gray-100">
+          <Calendar size={12} className="text-indigo-600" />
+          <span className="text-[10px] font-semibold text-gray-500">{formatDate(item.due_date)}</span>
         </div>
       </div>
     </div>
@@ -1200,35 +1224,188 @@ export default function App() {
       {editingUserStatus && <UserStatusModal user={editingUserStatus} onClose={() => setEditingUserStatus(null)} />}
 
       {/* AI Intelligence Chat Overlay */}
-      {isChatOpen && (
-        <div className="fixed bottom-10 right-10 w-[450px] h-[650px] bg-white rounded-[3rem] shadow-2xl border border-gray-100 flex flex-col z-50 animate-in slide-in-from-bottom-10">
-          <div className="p-8 border-b border-gray-50 flex items-center justify-between bg-indigo-600 rounded-t-[3rem]">
-            <div className="flex items-center gap-3">
-              <Zap className="text-white" size={20} />
-              <h3 className="text-white font-black uppercase tracking-widest text-sm">전략 어시스턴트</h3>
+      {isChatOpen && (() => {
+        const handleSendChat = async (text: string) => {
+          if (!text.trim() || isChatLoading) return;
+          const userMsg = text.trim();
+          setChatMessages(prev => [...prev, { role: 'user', text: userMsg }]);
+          setChatInput('');
+          setIsChatLoading(true);
+
+          try {
+            // 업무 컨텍스트 구성
+            const now = new Date();
+            const threeDaysLater = new Date(now.getTime() + 3 * 86400000);
+            const upcomingDeadlines = workItems
+              .filter(w => w.status !== '완료' && new Date(w.due_date) <= threeDaysLater)
+              .map(w => ({ title: w.title, dueDate: w.due_date }));
+
+            const context = {
+              userName: currentUser?.name || '사용자',
+              totalTasks: workItems.length,
+              highImpactTasks: workItems.filter(w => w.impact === 'high').length,
+              inProgressTasks: workItems.filter(w => w.status === '진행').length,
+              todoTasks: workItems.filter(w => w.status === '준비').length,
+              doneTasks: workItems.filter(w => w.status === '완료').length,
+              projectNames: [...new Set(workItems.map(w => w.project_name))],
+              upcomingDeadlines,
+            };
+
+            const directives = aiDirectives.map(d => d.summary || d.text);
+            const aiResponse = await generateStrategyResponse(userMsg, context, directives);
+            setChatMessages(prev => [...prev, { role: 'ai', text: aiResponse }]);
+          } catch {
+            setChatMessages(prev => [...prev, {
+              role: 'ai',
+              text: '⚠️ AI 응답 생성 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.'
+            }]);
+          } finally {
+            setIsChatLoading(false);
+          }
+        };
+        return (
+          <div className="fixed bottom-6 right-6 w-[380px] h-[500px] bg-white rounded-2xl shadow-2xl border border-gray-100 flex flex-col z-50 animate-scale-in">
+            <div className="px-5 py-3.5 border-b border-gray-50 flex items-center justify-between bg-indigo-600 rounded-t-2xl">
+              <div className="flex items-center gap-2">
+                <Zap className="text-white" size={16} />
+                <h3 className="text-white font-bold text-sm">전략 어시스턴트</h3>
+              </div>
+              <button onClick={() => setIsChatOpen(false)} className="text-white/50 hover:text-white transition-colors"><X size={18} /></button>
             </div>
-            <button onClick={() => setIsChatOpen(false)} className="text-white/50 hover:text-white transition-colors"><X size={24} /></button>
+            <div className="flex-1 p-4 overflow-y-auto space-y-3 no-scrollbar">
+              <div className="bg-gray-50 p-3 rounded-xl border border-gray-100">
+                <p className="text-sm font-medium text-gray-700 leading-relaxed">
+                  안녕하세요 {currentUser?.name}님. 현재 프로젝트 정보를 로드했습니다. 어떤 분석이 필요하신가요?
+                </p>
+              </div>
+              {chatMessages.length === 0 && (
+                <div className="space-y-2">
+                  <p className="text-[10px] font-bold text-gray-400 tracking-wider">추천 질문</p>
+                  {['현재 프로젝트 리스크 분석해줘', '이번 주 우선순위 조정 제안해줘', '팀 업무 부하 분석해줘'].map(q => (
+                    <button key={q} onClick={() => handleSendChat(q)} className="w-full text-left p-3 rounded-lg border border-gray-100 text-xs font-semibold text-indigo-600 hover:bg-indigo-50 transition-all">{q}</button>
+                  ))}
+                </div>
+              )}
+              {chatMessages.map((msg, idx) => (
+                <div key={idx} className={`p-3 rounded-xl text-sm ${msg.role === 'user' ? 'bg-indigo-600 text-white ml-8 font-medium' : 'bg-gray-50 border border-gray-100 text-gray-700 mr-4 font-medium leading-relaxed'}`}>
+                  {msg.text}
+                </div>
+              ))}
+              {isChatLoading && (
+                <div className="bg-gray-50 border border-gray-100 mr-4 p-3 rounded-xl flex items-center gap-2">
+                  <div className="flex gap-1">
+                    <div className="w-2 h-2 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                    <div className="w-2 h-2 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                    <div className="w-2 h-2 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                  </div>
+                  <span className="text-xs text-gray-400 font-medium">AI 분석 중...</span>
+                </div>
+              )}
+            </div>
+            <form onSubmit={(e) => { e.preventDefault(); handleSendChat(chatInput); }} className="p-3 border-t border-gray-100 bg-gray-50/50 rounded-b-2xl">
+              <div className="flex gap-2">
+                <input className="flex-1 pl-4 pr-3 py-2.5 bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500 text-sm font-medium outline-none shadow-sm" placeholder="AI에게 질문하세요..." value={chatInput} onChange={e => setChatInput(e.target.value)} />
+                <button type="submit" className="p-2.5 bg-indigo-600 text-white rounded-xl shadow-lg hover:bg-indigo-700 transition-colors"><ChevronRight size={16} /></button>
+              </div>
+            </form>
           </div>
-          <div className="flex-1 p-8 overflow-y-auto space-y-6 no-scrollbar">
-            <div className="bg-gray-50 p-6 rounded-2xl border border-gray-100">
-              <p className="text-sm font-bold text-gray-800 leading-relaxed uppercase">
-                안녕하세요 {currentUser?.name}님. 현재 프로젝트 클러스터 정보를 로드했습니다. 어떤 전략적 분석이 필요하신가요?
-              </p>
+        );
+      })()}
+
+      {/* AI 학습 채팅방 (매니저 전용) */}
+      {isLearningOpen && currentUser?.role === ROLES.MANAGER && (() => {
+        const handleLearningSubmit = async (text: string) => {
+          if (!text.trim() || isLearningLoading) return;
+          const input = text.trim();
+          setLearningInput('');
+          setIsLearningLoading(true);
+          try {
+            const existingTexts = aiDirectives.map(d => d.summary || d.text);
+            const summary = await processLearningInput(input, existingTexts);
+            await addDoc(collection(db, 'ai_directives'), {
+              text: input,
+              summary,
+              createdAt: new Date().toISOString(),
+              createdBy: currentUser?.id || '',
+              createdByName: currentUser?.name || '',
+            });
+          } catch {
+            alert('AI 학습 저장에 실패했습니다. 다시 시도해 주세요.');
+          } finally {
+            setIsLearningLoading(false);
+          }
+        };
+
+        const handleDeleteDirective = async (id: string) => {
+          if (!confirm('이 방향성을 삭제하시겠습니까?')) return;
+          await deleteDoc(doc(db, 'ai_directives', id));
+        };
+
+        return (
+          <div className="fixed bottom-6 right-[410px] w-[400px] h-[540px] bg-white rounded-2xl shadow-2xl border border-gray-100 flex flex-col z-50 animate-scale-in">
+            <div className="px-5 py-3.5 border-b border-gray-50 flex items-center justify-between bg-amber-500 rounded-t-2xl">
+              <div className="flex items-center gap-2">
+                <BookOpen className="text-white" size={16} />
+                <h3 className="text-white font-bold text-sm">AI 전략 학습</h3>
+                <span className="text-amber-100 text-[10px] font-semibold bg-amber-600/50 px-2 py-0.5 rounded-full">매니저 전용</span>
+              </div>
+              <button onClick={() => setIsLearningOpen(false)} className="text-white/50 hover:text-white transition-colors"><X size={18} /></button>
             </div>
-            <div className="space-y-4">
-              <p className="text-[10px] font-black text-gray-300 uppercase tracking-widest">추천 질문</p>
-              <button className="w-full text-left p-4 rounded-xl border border-gray-100 text-xs font-black text-indigo-600 hover:bg-indigo-50 transition-all uppercase">NextGen AI 리스크 분석</button>
-              <button className="w-full text-left p-4 rounded-xl border border-gray-100 text-xs font-black text-indigo-600 hover:bg-indigo-50 transition-all uppercase">이번 주 우선순위 제조정 제안</button>
+            <div className="flex-1 p-4 overflow-y-auto space-y-3 no-scrollbar">
+              <div className="bg-amber-50 p-3 rounded-xl border border-amber-100">
+                <p className="text-sm font-medium text-amber-800 leading-relaxed">
+                  팀의 전략적 방향성을 입력하면 AI가 학습하여 모든 팀원에게 일관된 전략 분석을 제공합니다.
+                </p>
+              </div>
+
+              {/* 저장된 방향성 목록 */}
+              {aiDirectives.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-[10px] font-bold text-gray-400 tracking-wider">학습된 방향성 ({aiDirectives.length}개)</p>
+                  {aiDirectives.map((d) => (
+                    <div key={d.id} className="p-3 rounded-xl border border-gray-100 bg-gray-50 group relative">
+                      <p className="text-xs font-bold text-gray-800 mb-1">📌 {d.summary}</p>
+                      <p className="text-[10px] text-gray-400 leading-relaxed">"{d.text}"</p>
+                      <p className="text-[9px] text-gray-300 mt-1.5">{new Date(d.createdAt).toLocaleDateString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>
+                      <button onClick={() => handleDeleteDirective(d.id)} className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-500 transition-all"><Trash2 size={12} /></button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {aiDirectives.length === 0 && (
+                <div className="space-y-2">
+                  <p className="text-[10px] font-bold text-gray-400 tracking-wider">예시 입력</p>
+                  {[
+                    '이번 분기는 신규 고객 확보보다 기존 고객 유지에 집중해야 해',
+                    '프론트엔드보다 백엔드 안정화를 우선시해줘',
+                    '팀원들에게 코드 리뷰를 적극 추천해줘'
+                  ].map(q => (
+                    <button key={q} onClick={() => handleLearningSubmit(q)} className="w-full text-left p-3 rounded-lg border border-amber-100 text-xs font-semibold text-amber-700 hover:bg-amber-50 transition-all">{q}</button>
+                  ))}
+                </div>
+              )}
+
+              {isLearningLoading && (
+                <div className="bg-amber-50 border border-amber-100 p-3 rounded-xl flex items-center gap-2">
+                  <div className="flex gap-1">
+                    <div className="w-2 h-2 bg-amber-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                    <div className="w-2 h-2 bg-amber-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                    <div className="w-2 h-2 bg-amber-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                  </div>
+                  <span className="text-xs text-amber-600 font-medium">AI 학습 중...</span>
+                </div>
+              )}
             </div>
+            <form onSubmit={(e) => { e.preventDefault(); handleLearningSubmit(learningInput); }} className="p-3 border-t border-gray-100 bg-amber-50/30 rounded-b-2xl">
+              <div className="flex gap-2">
+                <input className="flex-1 pl-4 pr-3 py-2.5 bg-white border border-amber-200 rounded-xl focus:ring-2 focus:ring-amber-500 text-sm font-medium outline-none shadow-sm" placeholder="팀 방향성/전략을 입력하세요..." value={learningInput} onChange={e => setLearningInput(e.target.value)} />
+                <button type="submit" disabled={isLearningLoading} className="p-2.5 bg-amber-500 text-white rounded-xl shadow-lg hover:bg-amber-600 transition-colors disabled:opacity-50"><ChevronRight size={16} /></button>
+              </div>
+            </form>
           </div>
-          <div className="p-8 border-t border-gray-50 bg-gray-50/50 rounded-b-[3rem]">
-            <div className="relative">
-              <input className="w-full pl-6 pr-14 py-4 bg-white border border-gray-200 rounded-2xl focus:ring-2 focus:ring-indigo-500 font-bold outline-none shadow-sm" placeholder="AI에게 질문하세요..." />
-              <button className="absolute right-3 top-1/2 -translate-y-1/2 p-2 bg-indigo-600 text-white rounded-xl shadow-lg"><ChevronRight size={18} /></button>
-            </div>
-          </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* 실시간 로딩 토스트 알림 */}
       {loadingMessage && (
