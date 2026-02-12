@@ -2,13 +2,15 @@
 
 @layer base {
   body {
-    @apply bg-gray-50 text-gray-900 font-sans selection:bg-indigo-100 selection:text-indigo-900;
+    @apply bg-gray-50 text-gray-900 selection:bg-indigo-100 selection:text-indigo-900 antialiased;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+      'Helvetica Neue', Arial, sans-serif;
   }
 }
 
 @layer components {
 
-  /* Scrollbar styling for better aesthetics */
+  /* Hide scrollbar for cleaner aesthetic */
   .no-scrollbar::-webkit-scrollbar {
     display: none;
   }
@@ -17,4 +19,67 @@
     -ms-overflow-style: none;
     scrollbar-width: none;
   }
+}
+
+/* ── Custom keyframe animations ── */
+@keyframes float {
+
+  0%,
+  100% {
+    transform: translateY(0px);
+  }
+
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
+@keyframes scale-in {
+  from {
+    transform: scale(0.95);
+    opacity: 0;
+  }
+
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes slide-up {
+  from {
+    transform: translateY(16px);
+    opacity: 0;
+  }
+
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+.animate-float {
+  animation: float 4s ease-in-out infinite;
+}
+
+.animate-scale-in {
+  animation: scale-in 0.3s ease-out;
+}
+
+.animate-slide-up {
+  animation: slide-up 0.4s ease-out;
+}
+
+.animate-fade-in {
+  animation: fade-in 0.3s ease-out;
 }

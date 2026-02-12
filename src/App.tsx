@@ -122,10 +122,10 @@ const generateWorkItems = (): WorkItem[] => {
     project_name: t.project,
     title: t.title,
     description: `${t.project} 프로젝트의 성공적인 목표 달성을 위해 담당자로서 수행하는 핵심 태스크입니다.`,
-    assignees: [INITIAL_USERS[i].id],
+    assignees: [INITIAL_USERS[i % INITIAL_USERS.length].id],
     requester: INITIAL_USERS[0].id,
     start_date: new Date().toISOString().split('T')[0],
-    due_date: new Date(Date.now() + (3 * 86400000)).toISOString().split('T')[0],
+    due_date: new Date(Date.now() + ((i + 2) * 86400000)).toISOString().split('T')[0],
     status: t.status as Status,
     updated_at: new Date().toISOString(),
     last_update_note: "최초 할당됨",
@@ -317,7 +317,8 @@ export default function App() {
     if (currentUser?.role === 'manager') {
       seedFirestore();
     }
-  }, [currentUser]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser?.id]);
 
   // --- 데이터 실시간 동기화 (업무, 유저, 제안) ---
   useEffect(() => {
@@ -758,7 +759,7 @@ export default function App() {
         <div className="flex items-center gap-3">
           <div className="flex -space-x-4">
             {item.assignees.map((aid: string) => {
-              const u = users.find((u: any) => u.id === aid);
+              const u = users.find((usr: User) => usr.id === aid);
               return (
                 <div key={aid} className="w-12 h-12 rounded-2xl bg-indigo-600 border-4 border-white flex items-center justify-center text-sm font-black text-white shadow-xl shadow-indigo-100 transition-transform hover:scale-125 hover:z-10 group/avatar">
                   {u?.name?.charAt(0)}
@@ -769,9 +770,13 @@ export default function App() {
           </div>
           {item.assignees.length > 0 && (
             <span className="text-[11px] font-black text-gray-500 uppercase tracking-tighter">
-              {item.assignees.length === 1
-                ? users.find((u: User) => u.id === item.assignees[0])?.name
-                : `${users.find((u: User) => u.id === item.assignees[0])?.name}+`}
+              {(() => {
+                const firstName = users.find((u: User) => u.id === item.assignees[0])?.name;
+                if (!firstName) return '';
+                return item.assignees.length === 1
+                  ? firstName
+                  : `${firstName} 외 ${item.assignees.length - 1}명`;
+              })()}
             </span>
           )}
         </div>
@@ -890,7 +895,7 @@ export default function App() {
     );
   };
 
-  const StatCard = ({ title, value, icon, color }: any) => (
+  const StatCard = ({ title, value, icon, color }: { title: string; value: number; icon: React.ReactNode; color: string }) => (
     <div className="bg-white p-10 rounded-[3rem] shadow-xl shadow-gray-100 border border-gray-100 relative overflow-hidden group hover:-translate-y-2 transition-all hover:shadow-2xl">
       <div className="flex items-center justify-between mb-6 relative z-10">
         <h3 className="font-black text-gray-300 text-[11px] uppercase tracking-[0.2em]">{title}</h3>
@@ -1030,7 +1035,7 @@ export default function App() {
               </div>
             </div>
             <div className="flex justify-end gap-6 pt-10">
-              <Button variant="ghost" onClick={onClose} className="px-14 py-5 rounded-full text-lg uppercase font-black hover:bg-gray-50 border-2">거래 취소</Button>
+              <Button variant="ghost" onClick={onClose} className="px-14 py-5 rounded-full text-lg uppercase font-black hover:bg-gray-50 border-2">취소</Button>
               <Button type="submit" className="px-20 py-5 rounded-full text-lg shadow-2xl shadow-indigo-100 font-black uppercase tracking-widest transition-transform hover:scale-105 active:scale-95">데이터 확정</Button>
             </div>
           </form>
@@ -1065,8 +1070,8 @@ export default function App() {
             </div>
             <div className="flex items-center justify-between pt-10 border-t border-gray-100">
               <div className="flex gap-6">
-                <Button className="px-14 py-5 rounded-full font-black text-sm uppercase tracking-[0.2em] shadow-2xl shadow-indigo-100 hover:scale-105" onClick={() => setProposals(prev => prev.map(p => p.id === prop.id ? { ...p, approval_status: 'approved' } : p))}>승인</Button>
-                <Button variant="outline" className="px-14 py-5 rounded-full font-black text-sm uppercase tracking-[0.2em] hover:bg-red-50 hover:text-red-500 hover:border-red-200" onClick={() => setProposals(prev => prev.map(p => p.id === prop.id ? { ...p, approval_status: 'rejected' } : p))}>반려</Button>
+                <Button className="px-14 py-5 rounded-full font-black text-sm uppercase tracking-[0.2em] shadow-2xl shadow-indigo-100 hover:scale-105" onClick={async () => { try { await updateDoc(doc(db, 'proposals', prop.id), { approval_status: 'approved' }); } catch (e) { console.error('승인 실패:', e); } }}>승인</Button>
+                <Button variant="outline" className="px-14 py-5 rounded-full font-black text-sm uppercase tracking-[0.2em] hover:bg-red-50 hover:text-red-500 hover:border-red-200" onClick={async () => { try { await updateDoc(doc(db, 'proposals', prop.id), { approval_status: 'rejected' }); } catch (e) { console.error('반려 실패:', e); } }}>반려</Button>
               </div>
               <div className="text-right">
                 <p className="text-[10px] text-gray-300 font-black uppercase tracking-[0.2em] mb-2 tracking-widest">요청자</p>
@@ -1167,7 +1172,7 @@ export default function App() {
     );
   };
 
-  const PriorityStat = ({ label, value, sub, color }: any) => (
+  const PriorityStat = ({ label, value, sub, color }: { label: string; value: string; sub: string; color: string }) => (
     <div className="bg-white/5 p-8 rounded-[2.5rem] border border-white/5 text-center flex flex-col justify-center backdrop-blur-sm transition-all hover:bg-white/10 hover:border-white/10">
       <p className="text-[10px] font-black text-indigo-300 uppercase tracking-[0.2em] mb-3">{label}</p>
       <p className="text-5xl font-black tracking-tighter mb-2">{value}</p>
