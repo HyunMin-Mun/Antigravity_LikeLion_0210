@@ -22,6 +22,15 @@ import {
 import { db, auth } from './lib/firebase';
 import { generateStrategyResponse, processLearningInput } from './lib/gemini';
 import {
+  trackLogin,
+  trackTaskFormOpen,
+  trackTaskFormSubmit,
+  trackTaskFormAbandon,
+  trackTaskFieldTouch,
+  trackChatMessageSent,
+  trackPageView
+} from './lib/analytics';
+import {
   Layout,
   CheckSquare,
   Inbox,
@@ -246,11 +255,17 @@ export default function App() {
             const fullUser: User = { id: user.uid, ...userData };
             setCurrentUser(fullUser);
 
+            // GA4 로그인 추적
+            trackLogin(user.uid, fullUser.role, fullUser.name);
+
             // 로그인 상태에서만 최초 1회 강제 뷰 전환 (현재 뷰가 로그인/회원가입일 때만)
-            setView(prev => (prev === 'login' || prev === 'signup')
-              ? (fullUser.role === 'manager' ? 'board' : 'my')
-              : prev
-            );
+            setView(prev => {
+              const nextView = (prev === 'login' || prev === 'signup')
+                ? (fullUser.role === 'manager' ? 'board' : 'my')
+                : prev;
+              trackPageView(nextView);
+              return nextView;
+            });
           } else {
             // 문서가 여전히 없으면 기본 정보로 자동 생성
             console.warn("Firestore 문서 자동 생성 시도...");
@@ -551,7 +566,11 @@ export default function App() {
             </form>
 
             <div className="mt-8 text-center">
-              <button onClick={() => setIsSignup(!isSignup)} className="text-indigo-600 font-black text-sm hover:underline">
+              <button onClick={() => {
+                const nextSignup = !isSignup;
+                setIsSignup(nextSignup);
+                trackPageView(nextSignup ? 'signup' : 'login');
+              }} className="text-indigo-600 font-black text-sm hover:underline">
                 {isSignup ? '이미 계정이 있나요? 로그인' : '처음이신가요? 회원가입'}
               </button>
             </div>
@@ -578,10 +597,10 @@ export default function App() {
         <span className="text-xl font-black tracking-tighter text-gray-900">WorkFlow</span>
       </div>
       <nav className="flex-1 px-4 space-y-1 mt-2">
-        <SidebarItem icon={<BarChart2 size={18} />} label="내 대시보드" active={view === 'my'} onClick={() => setView('my')} />
-        <SidebarItem icon={<Layout size={18} />} label="팀 업무 보드" active={view === 'board'} onClick={() => setView('board')} />
-        <SidebarItem icon={<TrendingUp size={18} />} label="전략 우선순위 엔진" active={view === 'priority'} onClick={() => setView('priority')} />
-        <SidebarItem icon={<Inbox size={18} />} label="승인 인박스" active={view === 'inbox'} onClick={() => setView('inbox')} count={proposals.filter(p => p.approval_status === 'pending').length} />
+        <SidebarItem icon={<BarChart2 size={18} />} label="내 대시보드" active={view === 'my'} onClick={() => { setView('my'); trackPageView('my'); }} />
+        <SidebarItem icon={<Layout size={18} />} label="팀 업무 보드" active={view === 'board'} onClick={() => { setView('board'); trackPageView('board'); }} />
+        <SidebarItem icon={<TrendingUp size={18} />} label="전략 우선순위 엔진" active={view === 'priority'} onClick={() => { setView('priority'); trackPageView('priority'); }} />
+        <SidebarItem icon={<Inbox size={18} />} label="승인 인박스" active={view === 'inbox'} onClick={() => { setView('inbox'); trackPageView('inbox'); }} count={proposals.filter(p => p.approval_status === 'pending').length} />
       </nav>
       <div className="p-4 pb-6 mt-auto">
         <div className="bg-gray-50 p-4 rounded-2xl border border-gray-100 relative group transition-all hover:bg-white hover:shadow-lg">
@@ -619,10 +638,10 @@ export default function App() {
           <input className="pl-9 pr-4 py-2 bg-gray-50 border-transparent border focus:border-indigo-100 rounded-lg text-sm font-medium w-56 focus:ring-2 focus:ring-indigo-500/10 shadow-inner transition-all outline-none" placeholder="업무, 팀원 검색..." />
         </div>
         <div className="flex items-center gap-2">
-          <Button onClick={() => setSelectedWorkId('new')} variant="indigo" className="px-4 py-2 rounded-lg text-xs font-bold">
+          <Button onClick={() => { setSelectedWorkId('new'); trackTaskFormOpen('header'); }} variant="indigo" className="px-4 py-2 rounded-lg text-xs font-bold">
             <Plus size={14} /> 업무 추가
           </Button>
-          <Button onClick={() => setIsChatOpen(true)} className="px-4 py-2 rounded-lg text-xs font-bold">
+          <Button onClick={() => { setIsChatOpen(true); trackChatMessageSent(currentUser?.role || 'member', false); }} className="px-4 py-2 rounded-lg text-xs font-bold">
             <Zap size={14} /> 전략 분석
           </Button>
           {currentUser?.role === ROLES.MANAGER && (
@@ -688,7 +707,7 @@ export default function App() {
                   {filteredItems.filter(i => i.status === col).map(item => (
                     <WorkCard key={item.id} item={item} onClick={() => setSelectedWorkId(item.id)} users={users} />
                   ))}
-                  <button onClick={() => setSelectedWorkId('new')} className="w-full py-3 border-2 border-dashed border-gray-200 rounded-xl text-gray-300 hover:text-indigo-600 hover:border-indigo-300 hover:bg-indigo-50/30 transition-all flex items-center justify-center gap-2 font-bold text-xs group">
+                  <button onClick={() => { setSelectedWorkId('new'); trackTaskFormOpen('board'); }} className="w-full py-3 border-2 border-dashed border-gray-200 rounded-xl text-gray-300 hover:text-indigo-600 hover:border-indigo-300 hover:bg-indigo-50/30 transition-all flex items-center justify-center gap-2 font-bold text-xs group">
                     <Plus size={16} className="group-hover:rotate-90 transition-transform" /> 업무 추가
                   </button>
                 </div>
@@ -878,7 +897,7 @@ export default function App() {
               <h2 className="text-3xl font-black text-gray-900 tracking-tighter uppercase">집중 업무 큐</h2>
               <p className="text-xs font-bold text-gray-300 tracking-[0.2em] mt-2 italic uppercase">마감일 임박 순으로 정렬됨</p>
             </div>
-            <Button variant="outline" onClick={() => setView('board')} className="px-8 py-4 rounded-full text-xs font-black uppercase tracking-widest hover:bg-indigo-600 hover:text-white border-2">전체 팀 보드 보기 <ChevronRight size={18} /></Button>
+            <Button variant="outline" onClick={() => { setView('board'); trackPageView('board'); }} className="px-8 py-4 rounded-full text-xs font-black uppercase tracking-widest hover:bg-indigo-600 hover:text-white border-2">전체 팀 보드 보기 <ChevronRight size={18} /></Button>
           </div>
           <table className="w-full text-left">
             <thead>
@@ -958,7 +977,10 @@ export default function App() {
           </div>
           <form className="flex-1 overflow-y-auto p-14 space-y-12 no-scrollbar" onSubmit={(e) => {
             e.preventDefault();
-            if (isNew) addWorkItem(form);
+            if (isNew) {
+              addWorkItem(form);
+              trackTaskFormSubmit(Object.values(form).filter(v => !!v).length);
+            }
             else updateWorkItem(id, form);
             onClose();
           }}>
@@ -966,7 +988,7 @@ export default function App() {
               <div className="col-span-2 space-y-4">
                 <label className="text-xs font-black text-gray-300 uppercase tracking-[0.3em] block ml-1">업무 제목</label>
                 <input required className="w-full px-8 py-6 bg-gray-50 border-transparent border focus:border-indigo-100 rounded-[2rem] focus:ring-4 focus:ring-indigo-500/5 font-black text-2xl outline-none shadow-inner transition-all uppercase placeholder:text-gray-200"
-                  value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} placeholder="업무 식별자를 입력하세요..." />
+                  value={form.title} onFocus={() => trackTaskFieldTouch('title')} onChange={e => setForm({ ...form, title: e.target.value })} placeholder="업무 식별자를 입력하세요..." />
               </div>
               <div className="space-y-4">
                 <label className="text-xs font-black text-gray-300 uppercase tracking-[0.3em] block ml-1">프로젝트 클러스터</label>
@@ -1016,7 +1038,7 @@ export default function App() {
               <div className="col-span-2 space-y-4">
                 <label className="text-xs font-black text-gray-300 uppercase tracking-[0.3em] block ml-1">전략적 설명</label>
                 <textarea className="w-full px-8 py-6 bg-gray-50 border-transparent border focus:border-indigo-100 rounded-[2rem] focus:ring-4 focus:ring-indigo-500/5 font-bold text-gray-600 outline-none shadow-inner transition-all min-h-[160px] leading-relaxed uppercase tracking-tight"
-                  value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} placeholder="핵심 근거 및 목표를 기술하세요..." />
+                  value={form.description} onFocus={() => trackTaskFieldTouch('description')} onChange={e => setForm({ ...form, description: e.target.value })} placeholder="핵심 근거 및 목표를 기술하세요..." />
               </div>
               <div className="grid grid-cols-2 gap-8 col-span-2 bg-indigo-50/30 p-10 rounded-[3rem] border border-indigo-100 shadow-inner">
                 <div className="space-y-4">
@@ -1220,7 +1242,7 @@ export default function App() {
         </div>
       </main>
 
-      {selectedWorkId && <WorkDetailModal id={selectedWorkId} onClose={() => setSelectedWorkId(null)} />}
+      {selectedWorkId && <WorkDetailModal id={selectedWorkId} onClose={() => { setSelectedWorkId(null); trackTaskFormAbandon(); }} />}
       {editingUserStatus && <UserStatusModal user={editingUserStatus} onClose={() => setEditingUserStatus(null)} />}
 
       {/* AI Intelligence Chat Overlay */}
@@ -1231,6 +1253,9 @@ export default function App() {
           setChatMessages(prev => [...prev, { role: 'user', text: userMsg }]);
           setChatInput('');
           setIsChatLoading(true);
+
+          // GA4 채팅 전송 추적
+          trackChatMessageSent(currentUser?.role || 'member', chatMessages.length === 0);
 
           try {
             // 업무 컨텍스트 구성
